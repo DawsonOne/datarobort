@@ -1,0 +1,59 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: datarobort
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${PLATFORM_DB_HOST:localhost}:${PLATFORM_DB_PORT:3307}/${PLATFORM_DB_NAME:datarobort}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${PLATFORM_DB_USER:root}
+    password: ${PLATFORM_DB_PASSWORD:root123}
+    druid:
+      initial-size: 2
+      min-idle: 2
+      max-active: 16
+      max-wait: 5000
+      validation-query: SELECT 1
+      test-while-idle: true
+  ai:
+    openai:
+      # Any OpenAI-compatible endpoint: Qwen (DashScope compatible mode),
+      # DeepSeek, or a self-hosted vLLM gateway.
+      api-key: ${OPENAI_API_KEY:sk-ws-H.RPXDMYI.eqKI.MEUCIQCDu0SnSltqkXYDzkps8-3zKpQdZktXvnXgab6fIKIYdQIgNhEz_XoSIbr3UpPrAA1yAiBqjOzk1TEZsqR461wucxM}
+      base-url: ${OPENAI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      chat: 
+        options:
+          model: ${OPENAI_CHAT_MODEL:qwen3.7-plus}
+          temperature: 0.1
+      embedding:
+        options:
+          model: ${OPENAI_EMBEDDING_MODEL:qwen3.7-text-embedding}
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+      # data-locations: classpath:data.sql  # 平台种子数据（暂空）
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId}] %logger{36} - %msg%n"
+  level:
+    com.datarobort: debug
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true
+
+datarobort:
+  # AES master key for secrets at rest (api keys, datasource passwords).
+  # Override with DATAROBORT_CRYPTO_KEY in production.
+  crypto-key: ${DATAROBORT_CRYPTO_KEY:datarobort-dev-key-2026}
+  spike:
+    # Spike B: Redis 8 instance with the query engine (vector search).
+    redis-host: ${SPIKE_REDIS_HOST:localhost}
+    redis-port: ${SPIKE_REDIS_PORT:6380}
+    # Spike C: sandbox image used to run untrusted Python code.
+    sandbox-image: ${SANDBOX_IMAGE:python:3.12-slim}
+    sandbox-timeout-seconds: 60

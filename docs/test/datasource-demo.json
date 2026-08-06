@@ -1,0 +1,1 @@
+{"name":"演示业务库","type":"mysql","jdbcUrl":"jdbc:mysql://localhost:3307/demo_business?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true","username":"root","password":"root123","description":"MySQL 8 容器中的演示业务库（orders/customers）"}
