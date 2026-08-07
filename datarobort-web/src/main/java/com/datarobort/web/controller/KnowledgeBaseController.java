@@ -4,11 +4,14 @@ import com.datarobort.common.result.Result;
 import com.datarobort.core.entity.Document;
 import com.datarobort.core.entity.KnowledgeBase;
 import com.datarobort.web.service.KnowledgeBaseService;
+import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.io.ByteArrayOutputStream;
+import java.util.Collections;
 import java.util.List;
 
 @RestController
@@ -49,9 +52,14 @@ public class KnowledgeBaseController {
         return Mono.fromCallable(() -> service.listDocuments(kbId)).subscribeOn(Schedulers.boundedElastic()).map(Result::ok);
     }
 
-    @PostMapping("/{kbId}/documents")
-    public Mono<Result<Document>> uploadDocument(@PathVariable Long kbId, @RequestParam("file") MultipartFile file) {
-        return Mono.fromCallable(() -> service.uploadDocument(kbId, file)).subscribeOn(Schedulers.boundedElastic()).map(Result::ok);
+    @PostMapping(value = "/{kbId}/documents", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Mono<Result<Document>> uploadDocument(@PathVariable Long kbId,
+                                                  @RequestPart("file") FilePart filePart) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        return DataBufferUtils.write(filePart.content(), baos)
+                .then(Mono.fromCallable(() -> service.uploadDocument(kbId, filePart.filename(), baos.toByteArray())))
+                .subscribeOn(Schedulers.boundedElastic())
+                .map(Result::ok);
     }
 
     @DeleteMapping("/{kbId}/documents/{docId}")

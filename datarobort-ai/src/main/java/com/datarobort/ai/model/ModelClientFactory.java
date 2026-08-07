@@ -70,6 +70,8 @@ public class ModelClientFactory {
     public void evict(Long id) {
         chatCache.remove(id);
         embeddingCache.remove(id);
+        // Probe cache is bounded (N embedding configs). Clearing on any eviction keeps it fresh.
+        probeCache.clear();
     }
 
     private OpenAiApi openAiApi(String baseUrl, String apiKey) {

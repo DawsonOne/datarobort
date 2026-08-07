@@ -10,6 +10,7 @@ import com.datarobort.core.entity.KnowledgeBase;
 import com.datarobort.core.entity.ModelConfig;
 import com.datarobort.core.mapper.ChunkMapper;
 import com.datarobort.core.mapper.DocumentMapper;
+import com.datarobort.core.mapper.ModelConfigMapper;
 import com.datarobort.web.service.ModelConfigService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -26,17 +27,20 @@ public class EmbeddingPipeline {
     private final ChunkMapper chunkMapper;
     private final DocumentMapper documentMapper;
     private final ModelConfigService modelConfigService;
+    private final ModelConfigMapper modelConfigMapper;
     private final ChunkStrategyRegistry strategyRegistry;
 
     public EmbeddingPipeline(VectorStoreService vectorStore,
                              ChunkMapper chunkMapper,
                              DocumentMapper documentMapper,
                              ModelConfigService modelConfigService,
+                             ModelConfigMapper modelConfigMapper,
                              ChunkStrategyRegistry strategyRegistry) {
         this.vectorStore = vectorStore;
         this.chunkMapper = chunkMapper;
         this.documentMapper = documentMapper;
         this.modelConfigService = modelConfigService;
+        this.modelConfigMapper = modelConfigMapper;
         this.strategyRegistry = strategyRegistry;
     }
 
@@ -98,15 +102,17 @@ public class EmbeddingPipeline {
     private EmbeddingModel getEmbeddingModel(KnowledgeBase kb) {
         if (kb.getEmbeddingModelId() == null)
             throw new BizException(ErrorCode.PARAM_INVALID, "知识库未绑定 Embedding 模型");
-        ModelConfig mc = modelConfigService.detail(kb.getEmbeddingModelId());
+        // Use mapper directly — modelConfigService.detail() masks the API key!
+        ModelConfig mc = modelConfigMapper.selectById(kb.getEmbeddingModelId());
+        if (mc == null) throw new BizException(ErrorCode.MODEL_NOT_FOUND);
         if (!ModelConfig.TYPE_EMBEDDING.equals(mc.getType()))
             throw new BizException(ErrorCode.PARAM_INVALID, "知识库绑定的模型不是 Embedding 类型");
         return modelConfigService.embeddingClient(mc);
     }
 
     private int kbEmbeddingDimension(KnowledgeBase kb) {
-        ModelConfig mc = modelConfigService.detail(kb.getEmbeddingModelId());
-        if (mc.getDimension() == null)
+        ModelConfig mc = modelConfigMapper.selectById(kb.getEmbeddingModelId());
+        if (mc == null || mc.getDimension() == null)
             throw new BizException(ErrorCode.EMBEDDING_DIM_MISMATCH, "Embedding 模型维度未知，请先在模型管理页测试连通");
         return mc.getDimension();
     }

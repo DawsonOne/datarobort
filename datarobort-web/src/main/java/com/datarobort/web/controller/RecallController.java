@@ -20,6 +20,9 @@ public class RecallController {
     @PostMapping
     public Mono<Result<List<RecallService.RecallItem>>> recall(@RequestBody Map<String, Object> body) {
         String query = (String) body.get("query");
+        if (query == null || query.isBlank()) {
+            return Mono.just(Result.error("1001", "query 参数不能为空"));
+        }
         int topK = body.get("topK") instanceof Number n ? n.intValue() : 10;
         double threshold = body.get("threshold") instanceof Number n ? n.doubleValue() : 0.3;
         return Mono.fromCallable(() -> recallService.recall(query, topK, threshold))

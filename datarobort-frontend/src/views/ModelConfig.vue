@@ -196,7 +196,7 @@ function openEdit(row) {
   form.apiKey = ''
   form.modelName = row.modelName
   form.isDefault = !!row.isDefault
-  form.statusBool = row.status !== 0
+  form.statusBool = row.status === 1
   dialogVisible.value = true
 }
 
@@ -232,13 +232,11 @@ async function doSave() {
 }
 
 async function doDelete(id) {
-  await deleteModel(id)
-  fetchList()
+  try { await deleteModel(id) } finally { fetchList() }
 }
 
 async function doSetDefault(row) {
-  await setDefaultModel(row.id)
-  fetchList()
+  try { await setDefaultModel(row.id) } finally { fetchList() }
 }
 
 async function doTest(row) {

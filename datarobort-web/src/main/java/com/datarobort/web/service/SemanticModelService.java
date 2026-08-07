@@ -39,7 +39,7 @@ public class SemanticModelService {
         if (sm.getRecallEnabled() == null) sm.setRecallEnabled(true);
         sm.setVectorStatus(SemanticModel.VEC_PENDING);
         mapper.insert(sm);
-        vectorizeAsync(sm);
+        vectorize(sm);
         return sm;
     }
 
@@ -49,7 +49,7 @@ public class SemanticModelService {
         sm.setId(id);
         sm.setVectorStatus(SemanticModel.VEC_PENDING);
         mapper.updateById(sm);
-        vectorizeAsync(sm);
+        vectorize(sm);
         return detail(id);
     }
 
@@ -60,10 +60,13 @@ public class SemanticModelService {
         vectorStore.delete(PREFIX + id);
     }
 
-    private void vectorizeAsync(SemanticModel sm) {
+    private void vectorize(SemanticModel sm) {
         try {
-            EmbeddingModel embModel = defaultEmbeddingModel();
-            ensureIndex(embModel);
+            ModelConfig mc = modelConfigMapper.selectDefault(ModelConfig.TYPE_EMBEDDING);
+            if (mc == null) throw new BizException(ErrorCode.PARAM_INVALID, "未设置默认 Embedding 模型");
+            if (mc.getDimension() == null) throw new BizException(ErrorCode.EMBEDDING_DIM_MISMATCH, "Embedding 模型维度未知");
+            EmbeddingModel embModel = modelConfigService.embeddingClient(mc);
+            vectorStore.createIndex(INDEX_NAME, PREFIX, mc.getDimension());
             String text = buildVectorText(sm);
             float[] vec = vectorStore.embed(embModel, text);
             vectorStore.insert(PREFIX + sm.getId(), vec,
@@ -84,20 +87,6 @@ public class SemanticModelService {
         if (sm.getColumnName() != null) sb.append(".").append(sm.getColumnName());
         if (sm.getSynonyms() != null) sb.append(" ").append(sm.getSynonyms());
         return sb.toString();
-    }
-
-    private EmbeddingModel defaultEmbeddingModel() {
-        ModelConfig mc = modelConfigMapper.selectDefault(ModelConfig.TYPE_EMBEDDING);
-        if (mc == null) throw new BizException(ErrorCode.PARAM_INVALID, "未设置默认 Embedding 模型");
-        if (mc.getDimension() == null) throw new BizException(ErrorCode.EMBEDDING_DIM_MISMATCH, "Embedding 模型维度未知");
-        return modelConfigService.embeddingClient(mc);
-    }
-
-    private void ensureIndex(EmbeddingModel embModel) {
-        if (!vectorStore.indexExists(INDEX_NAME)) {
-            ModelConfig mc = modelConfigMapper.selectDefault(ModelConfig.TYPE_EMBEDDING);
-            vectorStore.createIndex(INDEX_NAME, PREFIX, mc.getDimension());
-        }
     }
 
     private SemanticModel require(Long id) {

@@ -254,7 +254,7 @@ function openEdit(row) {
   form.username = row.username || ''
   form.password = ''
   form.description = row.description || ''
-  form.statusBool = row.status !== 0
+  form.statusBool = row.status === 1
   dialogVisible.value = true
 }
 
@@ -275,6 +275,7 @@ async function doSave() {
       description: form.description || null,
       status: form.statusBool ? 1 : 0,
     }
+    const savedDsId = isEdit.value ? editId.value : null;
     if (isEdit.value) {
       if (!payload.password) delete payload.password
       await updateDatasource(editId.value, payload)
@@ -283,9 +284,9 @@ async function doSave() {
     }
     dialogVisible.value = false
     await fetchList()
-    // Re-select if editing
-    if (isEdit.value && selectedDs.value?.id === editId.value) {
-      await loadSchema(editId.value)
+    // Re-select if editing — use savedDsId to avoid race with @closed handler
+    if (savedDsId != null && selectedDs.value?.id === savedDsId) {
+      await loadSchema(savedDsId)
     }
   } finally {
     saving.value = false
@@ -293,12 +294,12 @@ async function doSave() {
 }
 
 async function doDelete(id) {
-  await deleteDatasource(id)
-  if (selectedDs.value?.id === id) {
-    selectedDs.value = null
-    schemaTree.value = []
-  }
-  await fetchList()
+  try { await deleteDatasource(id)
+    if (selectedDs.value?.id === id) {
+      selectedDs.value = null
+      schemaTree.value = []
+    }
+  } finally { await fetchList() }
 }
 
 async function doTest(row) {
