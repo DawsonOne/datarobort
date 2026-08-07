@@ -72,7 +72,7 @@ async function doSave() {
     dialog.value = false; fetch()
   } finally { saving.value = false }
 }
-async function doDelete(id) { await deleteBK(id); fetch() }
+async function doDelete(id) { try { await deleteBK(id) } finally { fetch() } }
 onMounted(fetch)
 </script>
 

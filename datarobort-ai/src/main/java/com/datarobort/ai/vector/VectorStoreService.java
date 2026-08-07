@@ -44,9 +44,10 @@ public class VectorStoreService {
         return jedis;
     }
 
-    /** Create or recreate a vector index for the given dimension. */
-    public void createIndex(String indexName, String prefix, int dimension) {
-        dropIndexQuietly(indexName);
+    /** Create or recreate a vector index for the given dimension.
+     *  Safe for concurrent callers: only the first thread creates, others see it exists. */
+    public synchronized void createIndex(String indexName, String prefix, int dimension) {
+        if (indexExists(indexName)) return;
         Map<String, Object> attrs = new LinkedHashMap<>();
         attrs.put("TYPE", "FLOAT32");
         attrs.put("DIM", dimension);
@@ -84,7 +85,7 @@ public class VectorStoreService {
         byte[] blob = floatsToBytes(queryVector);
         Query q = new Query("*=>[KNN " + topK + " @embedding $BLOB AS score]")
                 .addParam("BLOB", blob)
-                .returnFields("content", "term", "synonyms", "score")
+                .returnFields("content", "term", "synonyms", "table_name", "column_name", "score")
                 .setSortBy("score", true)
                 .dialect(2);
         SearchResult result = jedis().ftSearch(indexName, q);
@@ -96,6 +97,8 @@ public class VectorStoreService {
             hit.setContent(doc.getString("content"));
             hit.setTerm(doc.getString("term"));
             hit.setSynonyms(doc.getString("synonyms"));
+            hit.setTableName(doc.getString("table_name"));
+            hit.setColumnName(doc.getString("column_name"));
             hits.add(hit);
         }
         return hits;
@@ -169,5 +172,7 @@ public class VectorStoreService {
         private String content;
         private String term;
         private String synonyms;
+        private String tableName;
+        private String columnName;
     }
 }

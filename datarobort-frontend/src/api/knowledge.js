@@ -9,12 +9,17 @@ export function deleteKB(id) { return api.delete(`/knowledge-bases/${id}`) }
 
 // Documents within a KB
 export function listDocuments(kbId) { return api.get(`/knowledge-bases/${kbId}/documents`) }
-export function uploadDocument(kbId, file) {
+export async function uploadDocument(kbId, file) {
   const fd = new FormData()
   fd.append('file', file)
-  return api.post(`/knowledge-bases/${kbId}/documents`, fd, {
-    headers: { 'Content-Type': 'multipart/form-data' },
+  const res = await fetch(`/api/knowledge-bases/${kbId}/documents`, {
+    method: 'POST',
+    body: fd,
   })
+  if (!res.ok) throw new Error(`上传失败: HTTP ${res.status}`)
+  const json = await res.json()
+  if (json.code !== '0') throw new Error(json.message || '上传失败')
+  return json.data
 }
 export function deleteDocument(kbId, docId) { return api.delete(`/knowledge-bases/${kbId}/documents/${docId}`) }
 

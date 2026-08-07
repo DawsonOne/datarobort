@@ -11,7 +11,7 @@
       <el-table-column prop="name" label="名称" min-width="140" />
       <el-table-column label="分块策略" width="100">
         <template #default="{ row }">
-          <el-tag size="small" :type="row.chunkStrategy === 'fixed' ? '' : row.chunkStrategy === 'heading' ? 'success' : 'warning'">{{ row.chunkStrategy }}</el-tag>
+          <el-tag size="small" :type="row.chunkStrategy === 'fixed' ? 'primary' : row.chunkStrategy === 'heading' ? 'success' : 'warning'">{{ row.chunkStrategy }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="chunkSize" label="分块大小" width="90" />
@@ -29,13 +29,18 @@
       </el-table-column>
     </el-table>
 
-    <!-- Document area (shown when a KB is selected) -->
-    <div v-if="selectedKb" style="margin-top:20px">
+    <!-- Document area -->
+    <div style="margin-top:20px;background:#fff;border:1px solid #e6e9f2;border-radius:12px;padding:16px">
+      <div v-if="!selectedKb" style="text-align:center;padding:40px 0;color:#94a3b8">
+        <el-icon style="font-size:32px"><Document /></el-icon>
+        <p style="margin-top:8px">👆 点击上方知识库行，在此处管理文档</p>
+      </div>
+      <template v-else>
       <div class="toolbar">
         <span style="font-weight:700">{{ selectedKb.name }} · 文档列表</span>
-        <el-upload :action="''" :auto-upload="false" :show-file-list="false"
-                   :on-change="onFileSelect" accept=".pdf,.docx,.md,.txt">
-          <el-button type="success"><el-icon><Upload /></el-icon>上传文档</el-button>
+        <el-upload :http-request="customUpload" :show-file-list="false"
+                   accept=".pdf,.docx,.md,.txt">
+          <el-button type="success"><el-icon><Upload /></el-icon>上传文档（PDF/Word/MD/TXT）</el-button>
         </el-upload>
       </div>
       <el-table :data="docs" border stripe v-loading="docLoading" size="small">
@@ -60,6 +65,7 @@
           </template>
         </el-table-column>
       </el-table>
+      </template>
     </div>
 
     <!-- KB Create/Edit Dialog -->
@@ -89,6 +95,9 @@
         <el-form-item label="开启召回">
           <el-switch v-model="kbForm.recallEnabled" />
         </el-form-item>
+        <el-form-item label="状态">
+          <el-switch v-model="kbForm.statusBool" active-text="启用" inactive-text="停用" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="kbDialog = false">取消</el-button>
@@ -109,12 +118,12 @@ const embeddingModels = ref([])
 
 const kbDialog = ref(false); const isEdit = ref(false); const editId = ref(null); const saving = ref(false)
 const kbFormRef = ref(null)
-const kbForm = reactive({ name: '', description: '', chunkStrategy: 'fixed', chunkSize: 500, chunkOverlap: 50, delimiter: '', embeddingModelId: null, recallEnabled: true })
+const kbForm = reactive({ name: '', description: '', chunkStrategy: 'fixed', chunkSize: 500, chunkOverlap: 50, delimiter: '', embeddingModelId: null, recallEnabled: true, statusBool: true })
 const kbRules = { name: [{ required: true, message: '请输入名称', trigger: 'blur' }], embeddingModelId: [{ required: true, message: '请选择Embedding模型', trigger: 'change' }] }
 
 function resetKbForm() {
   kbForm.name = ''; kbForm.description = ''; kbForm.chunkStrategy = 'fixed'; kbForm.chunkSize = 500; kbForm.chunkOverlap = 50
-  kbForm.delimiter = ''; kbForm.embeddingModelId = null; kbForm.recallEnabled = true; editId.value = null; isEdit.value = false
+  kbForm.delimiter = ''; kbForm.embeddingModelId = null; kbForm.recallEnabled = true; kbForm.statusBool = true; editId.value = null; isEdit.value = false
 }
 
 async function fetchKBs() { loading.value = true; try { kbs.value = await listKBs() } finally { loading.value = false } }
@@ -128,7 +137,7 @@ function openEditKB(row) {
   resetKbForm(); isEdit.value = true; editId.value = row.id
   kbForm.name = row.name; kbForm.description = row.description || ''; kbForm.chunkStrategy = row.chunkStrategy
   kbForm.chunkSize = row.chunkSize; kbForm.chunkOverlap = row.chunkOverlap; kbForm.delimiter = row.delimiter || ''
-  kbForm.embeddingModelId = row.embeddingModelId; kbForm.recallEnabled = !!row.recallEnabled
+  kbForm.embeddingModelId = row.embeddingModelId; kbForm.recallEnabled = !!row.recallEnabled; kbForm.statusBool = row.status === 1
   kbDialog.value = true
 }
 
@@ -136,21 +145,25 @@ async function doSaveKB() {
   try { await kbFormRef.value.validate() } catch { return }
   saving.value = true
   try {
-    const p = { name: kbForm.name, description: kbForm.description || null, chunkStrategy: kbForm.chunkStrategy, chunkSize: kbForm.chunkSize, chunkOverlap: kbForm.chunkOverlap, delimiter: kbForm.delimiter || null, embeddingModelId: kbForm.embeddingModelId, recallEnabled: kbForm.recallEnabled }
+    const p = { name: kbForm.name, description: kbForm.description || null, chunkStrategy: kbForm.chunkStrategy, chunkSize: kbForm.chunkSize, chunkOverlap: kbForm.chunkOverlap, delimiter: kbForm.delimiter || null, embeddingModelId: kbForm.embeddingModelId, recallEnabled: kbForm.recallEnabled, status: kbForm.statusBool ? 1 : 0 }
     if (isEdit.value) await updateKB(editId.value, p); else await createKB(p)
     kbDialog.value = false; fetchKBs()
   } finally { saving.value = false }
 }
 
-async function doDeleteKB(id) { await deleteKB(id); if (selectedKb.value?.id === id) { selectedKb.value = null; docs.value = [] }; fetchKBs() }
+async function doDeleteKB(id) { try { await deleteKB(id); if (selectedKb.value?.id === id) { selectedKb.value = null; docs.value = [] } } finally { fetchKBs() } }
 
-async function onFileSelect(uploadFile) {
+async function customUpload(options) {
   if (!selectedKb.value) return
-  await uploadDocument(selectedKb.value.id, uploadFile.raw)
+  try {
+    await uploadDocument(selectedKb.value.id, options.file)
+  } catch (e) {
+    // uploadDocument() now throws on failure; error toast handled inside
+  }
   fetchDocs()
 }
 
-async function doDeleteDoc(docId) { await deleteDocument(selectedKb.value.id, docId); fetchDocs() }
+async function doDeleteDoc(docId) { try { await deleteDocument(selectedKb.value.id, docId) } finally { fetchDocs() } }
 
 onMounted(() => { fetchKBs(); fetchEmbeddingModels() })
 </script>

@@ -1,21 +1,23 @@
 package com.datarobort.web.service;
 
 import com.datarobort.ai.vector.VectorStoreService;
+import com.datarobort.common.error.ErrorCode;
+import com.datarobort.common.exception.BizException;
 import com.datarobort.core.entity.BusinessKnowledge;
 import com.datarobort.core.entity.KnowledgeBase;
+import com.datarobort.core.entity.ModelConfig;
 import com.datarobort.core.entity.SemanticModel;
 import com.datarobort.core.mapper.BusinessKnowledgeMapper;
-import com.datarobort.core.mapper.ChunkMapper;
 import com.datarobort.core.mapper.KnowledgeBaseMapper;
 import com.datarobort.core.mapper.ModelConfigMapper;
 import com.datarobort.core.mapper.SemanticModelMapper;
 import com.datarobort.web.pipeline.EmbeddingPipeline;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * Unified recall service: merges results from knowledge base (chunks),
@@ -82,7 +84,8 @@ public class RecallService {
                     RecallItem item = new RecallItem();
                     item.setSourceType("business");
                     item.setSourceTitle(hit.getTerm());
-                    item.setContent(hit.getSynonyms());
+                    // Use 'term' as content to guarantee unique dedup keys (synonyms may be empty)
+                    item.setContent(hit.getTerm() != null ? hit.getTerm() : "");
                     item.setScore(hit.getScore());
                     all.add(item);
                 }
@@ -101,7 +104,10 @@ public class RecallService {
                     if (hit.getScore() < threshold) continue;
                     RecallItem item = new RecallItem();
                     item.setSourceType("semantic");
-                    item.setSourceTitle(hit.getSynonyms());
+                    String tbl = hit.getTableName() != null ? hit.getTableName() : "";
+                    String col = hit.getColumnName() != null ? "." + hit.getColumnName() : "";
+                    item.setSourceTitle(tbl + col + " → " + (hit.getSynonyms() != null ? hit.getSynonyms() : ""));
+                    item.setContent(tbl + col);
                     item.setScore(hit.getScore());
                     all.add(item);
                 }
@@ -133,11 +139,9 @@ public class RecallService {
         return deduped;
     }
 
-    private org.springframework.ai.embedding.EmbeddingModel defaultEmbeddingModel() {
-        com.datarobort.core.entity.ModelConfig mc =
-                modelConfigMapper.selectDefault(com.datarobort.core.entity.ModelConfig.TYPE_EMBEDDING);
-        if (mc == null) throw new com.datarobort.common.exception.BizException(
-                com.datarobort.common.error.ErrorCode.PARAM_INVALID, "未设置默认 Embedding 模型");
+    private EmbeddingModel defaultEmbeddingModel() {
+        ModelConfig mc = modelConfigMapper.selectDefault(ModelConfig.TYPE_EMBEDDING);
+        if (mc == null) throw new BizException(ErrorCode.PARAM_INVALID, "未设置默认 Embedding 模型");
         return modelConfigService.embeddingClient(mc);
     }
 

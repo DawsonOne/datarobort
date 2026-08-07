@@ -10,7 +10,11 @@
       </div>
     </div>
 
-    <el-table :data="list" border stripe v-loading="loading">
+    <div v-if="!selectedDs" style="text-align:center;padding:60px 0;color:#94a3b8">
+      <el-icon style="font-size:36px"><Connection /></el-icon>
+      <p style="margin-top:10px">👆 请先选择数据源，再配置表/字段同义词</p>
+    </div>
+    <el-table v-else :data="list" border stripe v-loading="loading">
       <el-table-column prop="id" label="ID" width="60" />
       <el-table-column prop="tableName" label="表名" width="160" />
       <el-table-column label="字段" width="160">
@@ -106,7 +110,7 @@ async function doSave() {
     dialog.value = false; fetch()
   } finally { saving.value = false }
 }
-async function doDelete(id) { await deleteSM(id); fetch() }
+async function doDelete(id) { try { await deleteSM(id) } finally { fetch() } }
 
 onMounted(fetchDatasources)
 </script>

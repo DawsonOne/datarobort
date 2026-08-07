@@ -39,7 +39,7 @@ public class BusinessKnowledgeService {
         if (bk.getRecallEnabled() == null) bk.setRecallEnabled(true);
         bk.setVectorStatus(BusinessKnowledge.VEC_PENDING);
         mapper.insert(bk);
-        vectorizeAsync(bk);
+        vectorize(bk);
         return bk;
     }
 
@@ -49,7 +49,7 @@ public class BusinessKnowledgeService {
         bk.setId(id);
         bk.setVectorStatus(BusinessKnowledge.VEC_PENDING);
         mapper.updateById(bk);
-        vectorizeAsync(bk);
+        vectorize(bk);
         return detail(id);
     }
 
@@ -60,10 +60,15 @@ public class BusinessKnowledgeService {
         vectorStore.delete(PREFIX + id);
     }
 
-    private void vectorizeAsync(BusinessKnowledge bk) {
+    // Runs synchronously within the calling transaction (not @Async).
+    // If embedding is slow, consider extracting to a separate async service.
+    private void vectorize(BusinessKnowledge bk) {
         try {
-            EmbeddingModel embModel = defaultEmbeddingModel();
-            ensureIndex(embModel);
+            ModelConfig mc = modelConfigMapper.selectDefault(ModelConfig.TYPE_EMBEDDING);
+            if (mc == null) throw new BizException(ErrorCode.PARAM_INVALID, "未设置默认 Embedding 模型");
+            if (mc.getDimension() == null) throw new BizException(ErrorCode.EMBEDDING_DIM_MISMATCH, "Embedding 模型维度未知");
+            EmbeddingModel embModel = modelConfigService.embeddingClient(mc);
+            vectorStore.createIndex(INDEX_NAME, PREFIX, mc.getDimension());
             String text = buildVectorText(bk);
             float[] vec = vectorStore.embed(embModel, text);
             vectorStore.insert(PREFIX + bk.getId(), vec, Map.of("term", bk.getTerm(), "synonyms", bk.getSynonyms() == null ? "" : bk.getSynonyms()));
@@ -80,20 +85,6 @@ public class BusinessKnowledgeService {
         StringBuilder sb = new StringBuilder(bk.getTerm());
         if (bk.getSynonyms() != null) sb.append(" ").append(bk.getSynonyms());
         return sb.toString();
-    }
-
-    private EmbeddingModel defaultEmbeddingModel() {
-        ModelConfig mc = modelConfigMapper.selectDefault(ModelConfig.TYPE_EMBEDDING);
-        if (mc == null) throw new BizException(ErrorCode.PARAM_INVALID, "未设置默认 Embedding 模型");
-        if (mc.getDimension() == null) throw new BizException(ErrorCode.EMBEDDING_DIM_MISMATCH, "Embedding 模型维度未知");
-        return modelConfigService.embeddingClient(mc);
-    }
-
-    private void ensureIndex(EmbeddingModel embModel) {
-        if (!vectorStore.indexExists(INDEX_NAME)) {
-            ModelConfig mc = modelConfigMapper.selectDefault(ModelConfig.TYPE_EMBEDDING);
-            vectorStore.createIndex(INDEX_NAME, PREFIX, mc.getDimension());
-        }
     }
 
     private BusinessKnowledge require(Long id) {
