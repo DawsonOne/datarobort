@@ -55,7 +55,6 @@ public class BusinessKnowledgeService {
 
     @Transactional
     public void delete(Long id) {
-        BusinessKnowledge bk = require(id);
         mapper.deleteById(id);
         vectorStore.delete(PREFIX + id);
     }
