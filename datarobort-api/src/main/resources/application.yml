@@ -55,5 +55,5 @@ datarobort:
     redis-host: ${SPIKE_REDIS_HOST:localhost}
     redis-port: ${SPIKE_REDIS_PORT:6380}
     # Spike C: sandbox image used to run untrusted Python code.
-    sandbox-image: ${SANDBOX_IMAGE:python:3.12-slim}
+    sandbox-image: ${SANDBOX_IMAGE:datarobort-sandbox:latest}
     sandbox-timeout-seconds: 60

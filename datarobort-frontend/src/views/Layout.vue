@@ -4,7 +4,7 @@
     <el-aside width="220px" style="background: #1e293b">
       <div class="logo">
         <span class="logo-text">DataRobort</span>
-        <span class="logo-sub">P2 知识增强</span>
+        <span class="logo-sub">P3 Agent 核心链路</span>
       </div>
       <el-menu
         :default-active="activeMenu"
@@ -14,6 +14,11 @@
         router
         style="border-right: none"
       >
+        <el-menu-item index="/chat">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>对话分析</span>
+        </el-menu-item>
+        <el-divider style="margin:8px 0;border-color:#334155" />
         <el-menu-item index="/models">
           <el-icon><Cpu /></el-icon>
           <span>模型管理</span>

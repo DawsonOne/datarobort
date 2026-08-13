@@ -9,8 +9,11 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -74,6 +77,16 @@ public class ModelClientFactory {
         probeCache.clear();
     }
 
+    // Shared RestClient builder with 2-min timeout for reasoning models (Qwen 3.7 etc.)
+    private static final RestClient.Builder REST_CLIENT_BUILDER;
+    static {
+        var httpClient = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(30))
+                .build();
+        REST_CLIENT_BUILDER = RestClient.builder()
+                .requestFactory(new JdkClientHttpRequestFactory(httpClient));
+    }
+
     private OpenAiApi openAiApi(String baseUrl, String apiKey) {
         // Spring AI's OpenAiApi appends /v1/chat/completions (or /v1/embeddings)
         // internally. Strip a trailing /v1 so we never produce /v1/v1/… paths.
@@ -84,6 +97,7 @@ public class ModelClientFactory {
         return OpenAiApi.builder()
                 .baseUrl(normalized)
                 .apiKey(apiKey == null ? "sk-none" : apiKey)
+                .restClientBuilder(REST_CLIENT_BUILDER)
                 .build();
     }
 }

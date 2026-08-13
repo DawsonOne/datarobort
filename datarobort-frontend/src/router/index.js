@@ -4,8 +4,14 @@ const routes = [
   {
     path: '/',
     component: () => import('../views/Layout.vue'),
-    redirect: '/models',
+    redirect: '/chat',
     children: [
+      {
+        path: 'chat',
+        name: 'ChatView',
+        component: () => import('../views/ChatView.vue'),
+        meta: { title: '对话分析', group: 'chat' },
+      },
       {
         path: 'models',
         name: 'ModelConfig',
