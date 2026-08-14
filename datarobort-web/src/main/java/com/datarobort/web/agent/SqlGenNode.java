@@ -111,22 +111,9 @@ public class SqlGenNode implements GraphNode {
         return state;
     }
 
-    /** Resolve agent-bound datasource ids; fall back to the legacy default (id=1). */
-    private List<Long> resolveDsIds(AgentState state) {
-        Object v = state.getAgentConfig().get("datasourceIds");
-        if (v instanceof List<?> list && !list.isEmpty()) {
-            List<Long> ids = new ArrayList<>();
-            for (Object o : list) {
-                if (o instanceof Number n) ids.add(n.longValue());
-            }
-            if (!ids.isEmpty()) return ids;
-        }
-        return List.of(1L);
-    }
-
     private String buildSchemaContext(AgentState state) {
         StringBuilder sb = new StringBuilder();
-        for (Long dsId : resolveDsIds(state)) {
+        for (Long dsId : AgentDsResolver.dsIds(state)) {
             Datasource ds = datasourceMapper.selectById(dsId);
             if (ds == null) {
                 log.warn("datasource {} not found, skipped", dsId);
@@ -166,8 +153,16 @@ public class SqlGenNode implements GraphNode {
         return sb.toString();
     }
 
-    /** Query up to 'limit' distinct values for a column in a table. */
+    /**
+     * Query up to 'limit' distinct values for a column in a table.
+     * Identifiers are sanitized before concatenation: only [A-Za-z0-9_$] is
+     * accepted, so metadata-controlled names cannot smuggle SQL.
+     */
     private List<String> queryDistinctValues(Datasource ds, String table, String column, int limit) {
+        if (!isSafeIdentifier(table) || !isSafeIdentifier(column)) {
+            log.warn("distinct-value query skipped: unsafe identifier {}.{}", table, column);
+            return List.of();
+        }
         try (Connection conn = poolManager.getPool(ds).getConnection();
              Statement stmt = conn.createStatement()) {
             stmt.setQueryTimeout(10);
@@ -185,6 +180,15 @@ public class SqlGenNode implements GraphNode {
             log.debug("distinct values query failed for {}.{}: {}", table, column, e.getMessage());
             return List.of();
         }
+    }
+
+    private static boolean isSafeIdentifier(String s) {
+        if (s == null || s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (!(Character.isLetterOrDigit(c) || c == '_' || c == '$')) return false;
+        }
+        return true;
     }
 
     private ChatClient defaultChatClient() {

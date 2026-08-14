@@ -31,7 +31,7 @@ public class ModelConfigService {
     private final ModelConfigMapper mapper;
     private final ModelClientFactory clientFactory;
 
-    @Value("${datarobort.crypto-key:datarobort-dev-key}")
+    @Value("${datarobort.crypto-key:datarobort-dev-key-2026}")
     private String cryptoKey;
 
     public ModelConfigService(ModelConfigMapper mapper, ModelClientFactory clientFactory) {

@@ -15,24 +15,32 @@ import java.util.*;
 
 /**
  * Executes the validated SQL against the bound business datasource.
- * Enforces row-count limit and query timeout.
+ * Defense in depth: re-validates the SQL (table whitelist, SELECT-only) right
+ * before execution, forces LIMIT ≤ MAX_ROWS, and runs on a read-only
+ * connection from the pool.
  */
 @Slf4j
 @Component
 public class SqlExecNode implements GraphNode {
 
-    private static final int MAX_ROWS = 500;
     private static final int QUERY_TIMEOUT_SEC = 30;
 
     private final DataSourcePoolManager poolManager;
     private final DatasourceMapper datasourceMapper;
+    private final SqlValidator sqlValidator;
 
     @Value("${datarobort.crypto-key:datarobort-dev-key-2026}")
     private String cryptoKey;
 
-    public SqlExecNode(DataSourcePoolManager poolManager, DatasourceMapper datasourceMapper) {
+    /** Row cap applied at execution time (LIMIT rewrite + JDBC maxRows). */
+    @Value("${datarobort.security.sql-max-rows:500}")
+    private int maxRows;
+
+    public SqlExecNode(DataSourcePoolManager poolManager, DatasourceMapper datasourceMapper,
+                       SqlValidator sqlValidator) {
         this.poolManager = poolManager;
         this.datasourceMapper = datasourceMapper;
+        this.sqlValidator = sqlValidator;
     }
 
     @Override
@@ -49,7 +57,7 @@ public class SqlExecNode implements GraphNode {
         long start = System.currentTimeMillis();
         // Agent-bound datasource: use the first datasource the agent binds;
         // fall back to the legacy default (id=1) when no binding exists.
-        Long dsId = resolveDsId(state);
+        Long dsId = AgentDsResolver.firstDsId(state);
         Datasource ds = datasourceMapper.selectById(dsId);
         if (ds == null) {
             state.addTrace("sql-exec", "failed", 0, "no datasource configured");
@@ -59,14 +67,30 @@ public class SqlExecNode implements GraphNode {
         // Decrypt password for pool creation
         ds = plainCopy(ds);
 
+        // Second validation right before execution — even if the state was
+        // touched upstream (LLM fix retries), the guard still applies.
+        // Versioned comments are stripped so the executed text is exactly the
+        // text the validator parsed (MySQL executes /*! ... */ content).
+        String sql = SqlValidator.stripVersionedComments(state.getGeneratedSql());
+        String guardError = sqlValidator.validate(sql, dsId);
+        if (guardError != null) {
+            state.addTrace("sql-exec", "failed", 0, "guard rejected: " + guardError);
+            state.setFailed(true); state.setErrorMessage("SQL 安全校验未通过: " + guardError);
+            return state;
+        }
+        try {
+            sql = SqlLimitEnforcer.enforceLimit(sql, maxRows);
+        } catch (IllegalArgumentException e) {
+            state.addTrace("sql-exec", "failed", 0, e.getMessage());
+            state.setFailed(true); state.setErrorMessage(e.getMessage());
+            return state;
+        }
+
         try (Connection conn = poolManager.getPool(ds).getConnection();
              Statement stmt = conn.createStatement()) {
+            conn.setReadOnly(true);
             stmt.setQueryTimeout(QUERY_TIMEOUT_SEC);
-            stmt.setMaxRows(MAX_ROWS);
-            String sql = state.getGeneratedSql();
-            if (!sql.toUpperCase().contains("LIMIT")) {
-                sql += " LIMIT " + MAX_ROWS;
-            }
+            stmt.setMaxRows(maxRows);
             try (ResultSet rs = stmt.executeQuery(sql)) {
                 ResultSetMetaData rsmd = rs.getMetaData();
                 int cols = rsmd.getColumnCount();
@@ -86,21 +110,11 @@ public class SqlExecNode implements GraphNode {
             }
         } catch (Exception e) {
             log.error("SQL execution failed", e);
-            state.addTrace("sql-exec", "failed", System.currentTimeMillis() - start, e.getMessage());
-            state.setFailed(true); state.setErrorMessage("SQL执行失败: " + e.getMessage());
+            String msg = truncate(e.getMessage());
+            state.addTrace("sql-exec", "failed", System.currentTimeMillis() - start, msg);
+            state.setFailed(true); state.setErrorMessage("SQL执行失败: " + msg);
         }
         return state;
-    }
-
-    /** Resolve the agent-bound datasource id; fall back to the legacy default (id=1). */
-    private Long resolveDsId(AgentState state) {
-        Object v = state.getAgentConfig().get("datasourceIds");
-        if (v instanceof List<?> list) {
-            for (Object o : list) {
-                if (o instanceof Number n) return n.longValue();
-            }
-        }
-        return 1L;
     }
 
     private Datasource plainCopy(Datasource d) {
@@ -114,5 +128,10 @@ public class SqlExecNode implements GraphNode {
         }
         copy.setDescription(d.getDescription()); copy.setStatus(d.getStatus());
         return copy;
+    }
+
+    private String truncate(String s) {
+        if (s == null) return "";
+        return s.length() <= SqlValidator.MAX_ERROR_LEN ? s : s.substring(0, SqlValidator.MAX_ERROR_LEN) + "...";
     }
 }

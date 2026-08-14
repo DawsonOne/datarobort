@@ -51,7 +51,7 @@ logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId}] %logger{36} - %msg%n"
   level:
-    com.datarobort: debug
+    com.datarobort: info
 
 mybatis:
   configuration:
@@ -68,3 +68,23 @@ datarobort:
     # Spike C: sandbox image used to run untrusted Python code.
     sandbox-image: ${SANDBOX_IMAGE:datarobort-sandbox:latest}
     sandbox-timeout-seconds: 60
+    # Max concurrent sandbox containers (semaphore, fail-fast beyond this).
+    sandbox-max-concurrency: ${SANDBOX_MAX_CONCURRENCY:2}
+    # Never auto-pull the sandbox image at runtime; build it explicitly.
+    # (Prevents an attacker with compose access from swapping the image.)
+    sandbox-allow-pull: false
+  security:
+    # SQL 1st line of defense: when true, a table referenced by the LLM that
+    # is missing from ds_table metadata (whitelist) is rejected.
+    sql-whitelist-required: false
+    # Hard cap enforced at execution time (SqlLimitEnforcer + Druid WallFilter).
+    sql-max-rows: 500
+  concurrency:
+    # Max concurrently running chat graph pipelines (semaphore in ChatController).
+    max-graph-threads: 8
+  upload:
+    # Knowledge-base document upload cap (MB).
+    max-size-mb: 20
+  cors:
+    # Comma-separated explicit origins; no credentials, no wildcard.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:8080}

@@ -14,6 +14,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.Semaphore;
 
 /**
  * Main chat API with SSE streaming.
@@ -21,6 +22,11 @@ import java.util.Map;
  * When agentId is present the pipeline runs with the agent's bound
  * datasources / knowledge / prompt; when conversationId is present the
  * multi-turn context is injected and messages are persisted.
+ *
+ * <p>Concurrency (P5): a semaphore caps the number of concurrently running
+ * graph pipelines, so concurrent requests cannot exhaust threads/DB/Docker
+ * resources. When the limit is reached new requests fail fast with an SSE
+ * error instead of queueing unbounded.
  */
 @Slf4j
 @RestController
@@ -29,10 +35,14 @@ public class ChatController {
 
     private final AgentChatService chatService;
     private final ObjectMapper objectMapper;
+    private final Semaphore graphSlots;
 
-    public ChatController(AgentChatService chatService, ObjectMapper objectMapper) {
+    public ChatController(AgentChatService chatService, ObjectMapper objectMapper,
+                          @org.springframework.beans.factory.annotation.Value(
+                                  "${datarobort.concurrency.max-graph-threads:8}") int maxGraphThreads) {
         this.chatService = chatService;
         this.objectMapper = objectMapper;
+        this.graphSlots = new Semaphore(Math.max(1, maxGraphThreads));
     }
 
     /** Plain JSON response — no SSE parsing needed on the frontend. */
@@ -76,6 +86,11 @@ public class ChatController {
             return Flux.just(buildEvent("error", "{\"error\":\"" + esc(e.getMessage()) + "\"}"));
         }
 
+        // Fail fast when the concurrency limit is reached
+        if (!graphSlots.tryAcquire()) {
+            return Flux.just(buildEvent("error", "{\"error\":\"服务器繁忙，请稍后重试\"}"));
+        }
+
         return Flux.<ServerSentEvent<String>>create(sink -> {
             // Signal that the SSE connection is established
             sink.next(buildEvent("connected", "{\"status\":\"ok\"}"));
@@ -109,6 +124,9 @@ public class ChatController {
                     log.error("graph execution failed", e);
                     sink.next(buildEvent("error", "{\"error\":\"" + esc(e.getMessage()) + "\"}"));
                     sink.complete();
+                } finally {
+                    // Always release the slot, even on client cancel / errors
+                    graphSlots.release();
                 }
             });
             graphThread.setDaemon(true);

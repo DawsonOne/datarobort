@@ -7,15 +7,14 @@ import com.datarobort.core.mapper.ModelConfigMapper;
 import com.datarobort.web.service.ModelConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
-import net.sf.jsqlparser.statement.Statement;
-import net.sf.jsqlparser.statement.select.Select;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
 
 /**
- * Validates generated SQL with JSqlParser. If validation fails, asks LLM to fix
- * it (up to 3 retries). Also enforces read-only (SELECT only).
+ * Validates generated SQL through {@link SqlValidator} (syntax, SELECT-only,
+ * no WITH / dangerous functions / table whitelist). If validation fails, asks
+ * the LLM to fix it (up to 3 retries). The guard is enforced again at execution
+ * time by SqlExecNode, so state tampering cannot bypass it.
  */
 @Slf4j
 @Component
@@ -26,6 +25,7 @@ public class SqlGuardNode implements GraphNode {
 
     private final ModelConfigService modelConfigService;
     private final ModelConfigMapper modelConfigMapper;
+    private final SqlValidator sqlValidator;
 
     @Override
     public AgentState execute(AgentState state) {
@@ -35,10 +35,11 @@ public class SqlGuardNode implements GraphNode {
         }
 
         String sql = state.getGeneratedSql();
+        Long dsId = AgentDsResolver.firstDsId(state);
 
         for (int attempt = 0; attempt < MAX_RETRY; attempt++) {
             long start = System.currentTimeMillis();
-            String error = validate(sql);
+            String error = sqlValidator.validate(sql, dsId);
             if (error == null) {
                 state.setGeneratedSql(sql);
                 state.addTrace("sql-guard", "done", System.currentTimeMillis() - start, "SQL valid");
@@ -61,19 +62,6 @@ public class SqlGuardNode implements GraphNode {
         state.addTrace("sql-guard", "failed", 0, "max retries exceeded: " + state.getSqlError());
         state.setFailed(true); state.setErrorMessage("SQL 校验失败(已重试" + MAX_RETRY + "次): " + state.getSqlError());
         return state;
-    }
-
-    /** Returns null if valid, otherwise the error message. */
-    private String validate(String sql) {
-        try {
-            Statement stmt = CCJSqlParserUtil.parse(sql);
-            if (!(stmt instanceof Select)) {
-                return "只允许 SELECT 语句，当前为: " + (stmt != null ? stmt.getClass().getSimpleName() : "null");
-            }
-            return null;
-        } catch (Exception e) {
-            return "SQL 语法错误: " + e.getMessage();
-        }
     }
 
     /** Ask LLM to fix the SQL. Returns null if unfixable. */

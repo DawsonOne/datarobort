@@ -22,10 +22,15 @@ public class SandboxSpikeService {
     @Value("${datarobort.spike.sandbox-timeout-seconds:60}")
     private long timeoutSeconds;
 
+    private final PythonSandboxClient sandbox;
+
+    public SandboxSpikeService(PythonSandboxClient sandbox) {
+        this.sandbox = sandbox;
+    }
+
     public Map<String, Object> run() {
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("image", image);
-        try (PythonSandboxClient sandbox = new PythonSandboxClient()) {
 
             // 1) normal execution: stdout must come back, exit code 0
             PythonSandboxClient.SandboxResult normal = sandbox.runPython(image,
@@ -67,7 +72,6 @@ public class SandboxSpikeService {
             report.put("networkIsolation", netCase);
 
             report.put("conclusion", "execute / timeout-kill / network-isolation all verified");
-        }
         return report;
     }
 }

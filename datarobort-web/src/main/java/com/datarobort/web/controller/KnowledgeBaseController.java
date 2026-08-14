@@ -4,13 +4,14 @@ import com.datarobort.common.result.Result;
 import com.datarobort.core.entity.Document;
 import com.datarobort.core.entity.KnowledgeBase;
 import com.datarobort.web.service.KnowledgeBaseService;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.io.ByteArrayOutputStream;
 import java.util.List;
 
 @RestController
@@ -18,8 +19,13 @@ import java.util.List;
 public class KnowledgeBaseController {
 
     private final KnowledgeBaseService service;
+    private final int maxUploadBytes;
 
-    public KnowledgeBaseController(KnowledgeBaseService service) { this.service = service; }
+    public KnowledgeBaseController(KnowledgeBaseService service,
+                                   @Value("${datarobort.upload.max-size-mb:20}") int maxUploadMb) {
+        this.service = service;
+        this.maxUploadBytes = maxUploadMb * 1024 * 1024;
+    }
 
     @GetMapping
     public Mono<Result<List<KnowledgeBase>>> list() {
@@ -54,10 +60,19 @@ public class KnowledgeBaseController {
     @PostMapping(value = "/{kbId}/documents", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
     public Mono<Result<Document>> uploadDocument(@PathVariable Long kbId,
                                                   @RequestPart("file") FilePart filePart) {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        return DataBufferUtils.write(filePart.content(), baos)
-                .then(Mono.fromCallable(() -> service.uploadDocument(kbId, filePart.filename(), baos.toByteArray())))
-                .subscribeOn(Schedulers.boundedElastic())
+        // DataBufferUtils.join(maxBytes) caps the payload while streaming and
+        // throws DataBufferLimitException when a huge / unbounded file is sent —
+        // otherwise the whole body would be buffered into heap memory (DoS).
+        return DataBufferUtils.join(filePart.content(), maxUploadBytes)
+                .onErrorMap(DataBufferLimitException.class,
+                        e -> new IllegalArgumentException("文件超过大小限制（" + (maxUploadBytes / 1024 / 1024) + "MB）"))
+                .flatMap(dataBuffer -> {
+                    byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                    dataBuffer.read(bytes);
+                    DataBufferUtils.release(dataBuffer);
+                    return Mono.fromCallable(() -> service.uploadDocument(kbId, filePart.filename(), bytes))
+                            .subscribeOn(Schedulers.boundedElastic());
+                })
                 .map(Result::ok);
     }
 

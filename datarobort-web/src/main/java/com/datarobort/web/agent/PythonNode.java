@@ -13,28 +13,42 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Base64;
 
 /**
  * Generates Python analysis code via LLM and executes it in the Docker sandbox.
+ *
+ * <p>Data injection hardening (P5): the full query result is handed to the
+ * sandbox as base64 (DATA_JSON_B64) instead of being embedded inside a
+ * {@code '''...'''} literal, so DB cells containing quotes or backslashes can
+ * never escape into the generated Python source. The LLM still sees a
+ * truncated plain-text preview for context.
  */
 @Slf4j
 @Component
 public class PythonNode implements GraphNode {
 
+    /** Generated code longer than this is rejected (LLM runaway output). */
+    private static final int MAX_CODE_CHARS = 20_000;
+
     private final ModelConfigService modelConfigService;
     private final ModelConfigMapper modelConfigMapper;
+    private final PythonSandboxClient sandbox;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Value("${datarobort.spike.sandbox-image:python:3.12-slim}")
+    @Value("${datarobort.spike.sandbox-image:datarobort-sandbox:latest}")
     private String sandboxImage;
 
     @Value("${datarobort.spike.sandbox-timeout-seconds:60}")
     private long sandboxTimeoutSeconds;
 
-    public PythonNode(ModelConfigService modelConfigService, ModelConfigMapper modelConfigMapper) {
+    public PythonNode(ModelConfigService modelConfigService, ModelConfigMapper modelConfigMapper,
+                      PythonSandboxClient sandbox) {
         this.modelConfigService = modelConfigService;
         this.modelConfigMapper = modelConfigMapper;
+        this.sandbox = sandbox;
     }
 
     @Override
@@ -52,9 +66,13 @@ public class PythonNode implements GraphNode {
         try {
             String dataJson = objectMapper.writeValueAsString(state.getQueryResult());
             String code = generateCode(dataJson, state.getUserQuestion());
+            if (code.length() > MAX_CODE_CHARS) {
+                state.setPythonError("生成的代码过长（" + code.length() + " 字符），已拒绝执行");
+                state.addTrace("python", "failed", System.currentTimeMillis() - start, "code too long");
+                return state;
+            }
             state.setPythonCode(code);
 
-            PythonSandboxClient sandbox = new PythonSandboxClient();
             PythonSandboxClient.SandboxResult result = sandbox.runPython(
                     sandboxImage, code, Duration.ofSeconds(sandboxTimeoutSeconds));
 
@@ -106,18 +124,20 @@ public class PythonNode implements GraphNode {
 
     private String generateCode(String dataJson, String question) {
         ChatClient client = defaultChatClient();
+        // Base64 is a safe alphabet — DB content can never break out of the literal
+        String dataB64 = Base64.getEncoder().encodeToString(dataJson.getBytes(StandardCharsets.UTF_8));
         String prompt = """
                 Write Python 3 code to analyze the following data and answer the user's question.
                 Print results as JSON using print(json.dumps(...)).
 
-                DATA (JSON array):
+                DATA (JSON array, truncated preview for reference):
                 %s
 
                 USER QUESTION: %s
 
                 REQUIREMENTS:
                 - Use only standard library + pandas + matplotlib
-                - Read data from DATA_JSON variable (already injected below)
+                - Read data from DATA_JSON_B64 variable (already injected below, base64-encoded JSON)
                 - Generate 1-3 charts with matplotlib that best answer the question
                   (bar/line/pie/scatter). For EACH chart, use the exact pattern:
                       import matplotlib
@@ -142,12 +162,12 @@ public class PythonNode implements GraphNode {
                 import io
                 import base64
 
-                DATA_JSON = '''%s'''
+                DATA_JSON_B64 = '%s'
 
-                data = json.loads(DATA_JSON)
+                data = json.loads(base64.b64decode(DATA_JSON_B64).decode('utf-8'))
                 df = pd.DataFrame(data)
                 # Your analysis code below
-                """.formatted(truncate(dataJson, 3000), question, dataJson);
+                """.formatted(truncate(dataJson, 3000), question, dataB64);
 
         String resp = client.prompt().user(prompt).call().content();
         if (resp == null) return "print(json.dumps({'error': 'no code generated'}))";

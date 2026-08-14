@@ -30,7 +30,7 @@ public class DatasourceService {
     private final DataSourcePoolManager poolManager;
     private final MetadataService metadataService;
 
-    @Value("${datarobort.crypto-key:datarobort-dev-key}")
+    @Value("${datarobort.crypto-key:datarobort-dev-key-2026}")
     private String cryptoKey;
 
     public DatasourceService(DatasourceMapper mapper,

@@ -1,6 +1,8 @@
 package com.datarobort.sandbox;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -8,6 +10,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -19,29 +22,63 @@ import java.util.concurrent.TimeUnit;
  * native dependency. The interface of this class stays stable, so the
  * transport can be swapped later without touching callers.
  *
- * <p>Security defaults: --network none, 512MB memory, 1 CPU, hard timeout
- * with forced kill; the container is created with --rm so nothing is left
- * behind.
+ * <p>Security defaults (P5): --network none, 512MB memory, 1 CPU, read-only
+ * root filesystem (tmpfs for /tmp), all capabilities dropped, no new
+ * privileges, pids limit, hard timeout with forced kill, --rm so nothing is
+ * left behind, --pull never so the image cannot be swapped at runtime, and
+ * bounded stdout/stderr collection. A concurrency semaphore (default 2)
+ * prevents many simultaneous containers from exhausting the daemon.
  */
 @Slf4j
+@Component
 public class PythonSandboxClient implements AutoCloseable {
 
     private static final String MEMORY_LIMIT = "512m";
     private static final String CPU_LIMIT = "1";
+    private static final int MAX_OUTPUT_CHARS = 64 * 1024;
+    private static final Duration SLOT_WAIT = Duration.ofSeconds(10);
 
     /** Result of one sandbox execution. */
     public record SandboxResult(boolean timeout, long exitCode, String stdout, String stderr,
                                 long elapsedMs, String containerId) {
     }
 
+    private final int maxConcurrency;
+    private final boolean allowPull;
+    private final Semaphore concurrency;
+
+    public PythonSandboxClient(
+            @Value("${datarobort.spike.sandbox-max-concurrency:2}") int maxConcurrency,
+            @Value("${datarobort.spike.sandbox-allow-pull:false}") boolean allowPull) {
+        this.maxConcurrency = Math.max(1, maxConcurrency);
+        this.allowPull = allowPull;
+        this.concurrency = new Semaphore(this.maxConcurrency);
+    }
+
     /**
      * Runs a Python snippet in a fresh, isolated container.
      *
-     * @param image   sandbox image, e.g. python:3.12-slim
+     * @param image   sandbox image, e.g. datarobort-sandbox:latest
      * @param code    python source, piped to {@code python} over stdin
      * @param timeout hard limit; the container is killed when exceeded
      */
     public SandboxResult runPython(String image, String code, Duration timeout) {
+        try {
+            if (!concurrency.tryAcquire(SLOT_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
+                throw new IllegalStateException("沙箱繁忙，请稍后重试");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while waiting for a sandbox slot", e);
+        }
+        try {
+            return doRun(image, code, timeout);
+        } finally {
+            concurrency.release();
+        }
+    }
+
+    private SandboxResult doRun(String image, String code, Duration timeout) {
         ensureImage(image);
         String name = "datarobort-sandbox-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         long start = System.nanoTime();
@@ -52,6 +89,15 @@ public class PythonSandboxClient implements AutoCloseable {
                 "--network", "none",
                 "--memory", MEMORY_LIMIT,
                 "--cpus", CPU_LIMIT,
+                "--read-only",
+                "--cap-drop", "ALL",
+                "--pids-limit", "128",
+                "--security-opt", "no-new-privileges",
+                "--tmpfs", "/tmp:rw,size=64m,noexec,nosuid",
+                "-e", "MPLCONFIGDIR=/tmp",
+                "-e", "HOME=/tmp",
+                "--stop-timeout", "10",
+                "--pull", allowPull ? "always" : "never",
                 "-i", image,
                 "python", "-");
         Process process;
@@ -61,8 +107,8 @@ public class PythonSandboxClient implements AutoCloseable {
             throw new IllegalStateException("failed to start docker CLI, is docker on PATH?", e);
         }
 
-        StringBuilder stdout = new StringBuilder();
-        StringBuilder stderr = new StringBuilder();
+        BoundedOutputCollector stdout = new BoundedOutputCollector(MAX_OUTPUT_CHARS);
+        BoundedOutputCollector stderr = new BoundedOutputCollector(MAX_OUTPUT_CHARS);
         Thread outGobbler = gobble(process.getInputStream(), stdout);
         Thread errGobbler = gobble(process.getErrorStream(), stderr);
 
@@ -78,12 +124,12 @@ public class PythonSandboxClient implements AutoCloseable {
                 process.waitFor(5, TimeUnit.SECONDS);
                 joinQuietly(outGobbler);
                 joinQuietly(errGobbler);
-                return new SandboxResult(true, -1, stdout.toString(), stderr.toString(),
+                return new SandboxResult(true, -1, stdout.content(), stderr.content(),
                         elapsedMs(start), name);
             }
             joinQuietly(outGobbler);
             joinQuietly(errGobbler);
-            return new SandboxResult(false, process.exitValue(), stdout.toString(), stderr.toString(),
+            return new SandboxResult(false, process.exitValue(), stdout.content(), stderr.content(),
                     elapsedMs(start), name);
         } catch (IOException e) {
             throw new IllegalStateException("failed to feed code to sandbox container", e);
@@ -100,6 +146,10 @@ public class PythonSandboxClient implements AutoCloseable {
                     .redirectErrorStream(true).start();
             if (inspect.waitFor(30, TimeUnit.SECONDS) && inspect.exitValue() == 0) {
                 return;
+            }
+            if (!allowPull) {
+                throw new IllegalStateException("sandbox image " + image + " 不存在，请先构建: "
+                        + "docker build -t " + image + " docker/sandbox/");
             }
             log.info("sandbox image {} not found locally, pulling...", image);
             Process pull = new ProcessBuilder("docker", "pull", image).inheritIO().start();
@@ -124,15 +174,13 @@ public class PythonSandboxClient implements AutoCloseable {
         }
     }
 
-    private Thread gobble(InputStream in, StringBuilder sink) {
+    private Thread gobble(InputStream in, BoundedOutputCollector sink) {
         Thread t = new Thread(() -> {
             try {
                 byte[] buf = new byte[4096];
                 int n;
                 while ((n = in.read(buf)) != -1) {
-                    synchronized (sink) {
-                        sink.append(new String(buf, 0, n, StandardCharsets.UTF_8));
-                    }
+                    sink.append(new String(buf, 0, n, StandardCharsets.UTF_8));
                 }
             } catch (IOException ignored) {
                 // stream closed
