@@ -1,6 +1,9 @@
 -- DataRobort 演示业务库：建表 + 测试数据
 -- 用法：docker exec -i datarobort-mysql8 mysql -uroot -proot123 demo_business < demo-data.sql
 
+-- 必须显式声明客户端字符集，否则 initdb/导入时中文被双重编码（mojibake）
+SET NAMES utf8mb4;
+
 CREATE DATABASE IF NOT EXISTS demo_business DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 USE demo_business;
 
