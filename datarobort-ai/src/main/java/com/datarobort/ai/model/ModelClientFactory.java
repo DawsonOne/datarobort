@@ -37,9 +37,13 @@ public class ModelClientFactory {
     public ChatClient chatClient(Long id, String baseUrl, String apiKey, String modelName) {
         return chatCache.computeIfAbsent(id, k -> {
             OpenAiApi api = openAiApi(baseUrl, apiKey);
+            // temperature=0：SQL 生成/意图识别需要确定性输出（评测复现稳定）
             OpenAiChatModel model = OpenAiChatModel.builder()
                     .openAiApi(api)
-                    .defaultOptions(OpenAiChatOptions.builder().model(modelName).build())
+                    .defaultOptions(OpenAiChatOptions.builder()
+                            .model(modelName)
+                            .temperature(0.0)
+                            .build())
                     .build();
             return ChatClient.builder(model).build();
         });

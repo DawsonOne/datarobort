@@ -65,11 +65,16 @@ public class SqlGuardNode implements GraphNode {
     }
 
     /** Ask LLM to fix the SQL. Returns null if unfixable. */
-    private String fixSql(String badSql, String error) {
+    public String fixSql(String badSql, String error) {
         try {
             ChatClient client = defaultChatClient();
             String prompt = """
                     Fix the following SQL based on the error message. Reply with ONLY the corrected SQL, no explanation.
+
+                    MySQL 规则:
+                    - 若报错为 ONLY_FULL_GROUP_BY: SELECT 列表中所有非聚合列必须全部出现在 GROUP BY 子句中
+                    - 保持只读 SELECT，禁止 INSERT/UPDATE/DELETE/DROP/多语句
+                    - 不要改变查询的业务语义
 
                     Bad SQL: %s
                     Error: %s

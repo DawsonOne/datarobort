@@ -84,21 +84,36 @@ public class SqlGenNode implements GraphNode {
                     %s
 
                     ### 要求
-                    - 只生成 SELECT 语句，禁止 INSERT/UPDATE/DELETE/DROP
+                    - 只生成一条只读 SELECT 语句，禁止 INSERT/UPDATE/DELETE/DROP/多语句
                     - 只返回 SQL，不要解释，不要 markdown 代码块
                     - 使用 LIMIT 限制最多返回 500 行
-                    - 如果问题无法转化为 SQL，回复: NO_SQL
+                    - 报告/多指标问题（如"销售报告：总销售额、订单数、类目"）：用单条聚合 SELECT 覆盖核心指标（COUNT/SUM/AVG、CASE WHEN 分桶、GROUP BY），不要因为"一条查询无法覆盖全部维度"而放弃生成；无法聚合的次要维度可返回聚合结果即可
+                    - 只有完全无法用 SELECT 表达的问题（如闲聊、写作）才回复: NO_SQL
 
                     SQL:""".formatted(schema, recall, state.getUserQuestion()));
 
             ChatClient client = defaultChatClient();
-            String sql = client.prompt().user(prompt.toString()).call().content();
-            if (sql == null || sql.isBlank() || sql.contains("NO_SQL")) {
+            String base = prompt.toString();
+            String forceHint = "";
+            String sql = null;
+            // LLM 偶发返回 NO_SQL（综合报告/多指标问题）：强制重试一次，
+            // 第二次明确要求必须生成一条聚合 SELECT。
+            for (int attempt = 0; attempt < 2; attempt++) {
+                sql = client.prompt().user(base + forceHint).call().content();
+                if (sql == null || sql.isBlank()) break;
+                // Strip markdown code fences if present
+                sql = sql.replaceAll("```sql\\s*", "").replaceAll("```\\s*", "").trim();
+                if (!sql.contains("NO_SQL")) break;
+                sql = null;
+                if (attempt == 0) {
+                    forceHint = "\n\n注意：用户明确要求数据查询/分析/报告，必须生成一条可执行的聚合 SELECT"
+                            + "（如 SELECT COUNT(*), SUM(amount) FROM orders）。禁止回复 NO_SQL，再次生成：";
+                }
+            }
+            if (sql == null || sql.isBlank()) {
                 state.addTrace("sql-gen", "done", System.currentTimeMillis() - start, "no SQL needed");
                 return state;
             }
-            // Strip markdown code fences if present
-            sql = sql.replaceAll("```sql\\s*", "").replaceAll("```\\s*", "").trim();
             state.setGeneratedSql(sql);
             state.setSqlRetryCount(0);
             state.addTrace("sql-gen", "done", System.currentTimeMillis() - start, "sql=" + truncate(sql, 100));

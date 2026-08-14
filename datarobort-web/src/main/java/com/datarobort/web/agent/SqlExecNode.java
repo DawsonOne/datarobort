@@ -24,10 +24,13 @@ import java.util.*;
 public class SqlExecNode implements GraphNode {
 
     private static final int QUERY_TIMEOUT_SEC = 30;
+    /** Execution-error fix attempts (MySQL semantic errors like ONLY_FULL_GROUP_BY). */
+    private static final int MAX_EXEC_RETRY = 2;
 
     private final DataSourcePoolManager poolManager;
     private final DatasourceMapper datasourceMapper;
     private final SqlValidator sqlValidator;
+    private final SqlGuardNode sqlGuardNode;
 
     @Value("${datarobort.crypto-key:datarobort-dev-key-2026}")
     private String cryptoKey;
@@ -37,10 +40,11 @@ public class SqlExecNode implements GraphNode {
     private int maxRows;
 
     public SqlExecNode(DataSourcePoolManager poolManager, DatasourceMapper datasourceMapper,
-                       SqlValidator sqlValidator) {
+                       SqlValidator sqlValidator, SqlGuardNode sqlGuardNode) {
         this.poolManager = poolManager;
         this.datasourceMapper = datasourceMapper;
         this.sqlValidator = sqlValidator;
+        this.sqlGuardNode = sqlGuardNode;
     }
 
     @Override
@@ -86,6 +90,54 @@ public class SqlExecNode implements GraphNode {
             return state;
         }
 
+        try {
+            List<Map<String, Object>> rows = runQuery(ds, sql);
+            state.setQueryResult(rows);
+            state.setRowCount(rows.size());
+            long dur = System.currentTimeMillis() - start;
+            state.addTrace("sql-exec", "done", dur, rows.size() + " rows returned");
+            log.info("SQL executed: {} rows in {}ms", rows.size(), dur);
+        } catch (Exception e) {
+            // Execution-time fix loop: MySQL semantic errors (ONLY_FULL_GROUP_BY,
+            // unknown column, ...) are sent back to the LLM for repair. Every
+            // fixed SQL must pass the validator again before re-execution.
+            String msg = truncate(e.getMessage());
+            List<Map<String, Object>> rows = null;
+            for (int attempt = 0; attempt < MAX_EXEC_RETRY; attempt++) {
+                String fixed = sqlGuardNode.fixSql(sql, msg);
+                if (fixed == null) break;
+                if (sqlValidator.validate(fixed, dsId) != null) break;  // 修复破坏安全约束 → 放弃
+                try {
+                    sql = SqlLimitEnforcer.enforceLimit(fixed, maxRows);
+                } catch (IllegalArgumentException ex) {
+                    break;
+                }
+                try {
+                    rows = runQuery(ds, sql);
+                    msg = null;
+                    break;
+                } catch (Exception ex2) {
+                    msg = truncate(ex2.getMessage());
+                }
+            }
+            if (rows != null) {
+                state.setGeneratedSql(sql);
+                state.setQueryResult(rows);
+                state.setRowCount(rows.size());
+                long dur = System.currentTimeMillis() - start;
+                state.addTrace("sql-exec", "done", dur, rows.size() + " rows returned (修复后执行成功)");
+                log.info("SQL fixed by LLM and executed: {} rows", rows.size());
+                return state;
+            }
+            log.error("SQL execution failed", e);
+            state.addTrace("sql-exec", "failed", System.currentTimeMillis() - start, msg);
+            state.setFailed(true); state.setErrorMessage("SQL执行失败: " + msg);
+        }
+        return state;
+    }
+
+    /** Run a single read-only query and collect rows (bounded by maxRows). */
+    private List<Map<String, Object>> runQuery(Datasource ds, String sql) throws Exception {
         try (Connection conn = poolManager.getPool(ds).getConnection();
              Statement stmt = conn.createStatement()) {
             conn.setReadOnly(true);
@@ -102,19 +154,9 @@ public class SqlExecNode implements GraphNode {
                     }
                     rows.add(row);
                 }
-                state.setQueryResult(rows);
-                state.setRowCount(rows.size());
-                long dur = System.currentTimeMillis() - start;
-                state.addTrace("sql-exec", "done", dur, rows.size() + " rows returned");
-                log.info("SQL executed: {} rows in {}ms", rows.size(), dur);
+                return rows;
             }
-        } catch (Exception e) {
-            log.error("SQL execution failed", e);
-            String msg = truncate(e.getMessage());
-            state.addTrace("sql-exec", "failed", System.currentTimeMillis() - start, msg);
-            state.setFailed(true); state.setErrorMessage("SQL执行失败: " + msg);
         }
-        return state;
     }
 
     private Datasource plainCopy(Datasource d) {

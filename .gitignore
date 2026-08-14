@@ -24,3 +24,5 @@ Thumbs.db
 
 # Runtime artifacts
 reports/
+__pycache__/
+*.pyc

@@ -26,9 +26,9 @@ public class IntentNode implements GraphNode {
 
             Categories:
             - chat: casual conversation, greetings, general questions NOT about data
-            - query: asking for specific numbers, counts, sums, or simple data lookups (Text-to-SQL)
-            - analyze: asking for deep analysis, trends, statistics, or comparisons that require Python
-            - report: asking for a formatted report with charts, visualizations, or multi-section output
+            - query: plain data lookups WITHOUT analysis wording — exact numbers, counts, sums, lists (e.g. "查询/统计/有几个/列出/各有多少")
+            - analyze: any question with analysis wording ("分析/趋势/占比/对比/变化/差异") even if it includes a top-N list or simple aggregation (e.g. "分析销售额最高的5个类目" → analyze)
+            - report: asking for a formatted report with charts, visualizations, or multi-section output ("报告/写一份…报告")
 
             User input: %s
             Intent:""";
