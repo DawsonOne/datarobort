@@ -1,72 +1,102 @@
 <template>
   <div class="chat-page">
-    <!-- Messages area -->
-    <div class="chat-messages" ref="msgContainer">
-      <div v-if="messages.length === 0" class="empty-hint">
-        <el-icon style="font-size:48px;color:#cbd5e1"><ChatDotRound /></el-icon>
-        <p style="margin-top:12px;color:#94a3b8">向 DataRobort 提问，开始数据分析</p>
+    <!-- Top bar: agent selector + new chat -->
+    <div class="chat-topbar">
+      <el-select v-model="agentId" placeholder="选择智能体（不选则走默认链路）" clearable
+                 size="default" style="width: 260px" @change="onAgentChange">
+        <el-option v-for="a in agents" :key="a.id" :label="a.name + (a.status === 1 ? '' : '（草稿）')" :value="a.id" />
+      </el-select>
+      <el-button @click="newChat"><el-icon><Plus /></el-icon>新建对话</el-button>
+      <span v-if="currentConversation" class="conv-title" :title="currentConversation.title">
+        {{ currentConversation.title }}
+      </span>
+    </div>
+
+    <div class="chat-body">
+      <!-- Conversation sidebar -->
+      <div class="conv-sidebar">
+        <div class="conv-sidebar-head">
+          <span>历史会话</span>
+          <el-button text size="small" @click="fetchConversations"><el-icon><Refresh /></el-icon></el-button>
+        </div>
+        <div class="conv-list">
+          <div v-for="c in conversations" :key="c.id" class="conv-item"
+               :class="{ active: c.id === conversationId }" @click="loadConversation(c)">
+            <div class="conv-item-title">{{ c.title }}</div>
+            <div class="conv-item-time">{{ formatTime(c.updateTime) }}</div>
+          </div>
+          <el-empty v-if="conversations.length === 0" description="暂无会话" :image-size="50" />
+        </div>
       </div>
 
-      <div v-for="(msg, i) in messages" :key="i" class="msg-wrapper">
-        <!-- User message -->
-        <div v-if="msg.role === 'user'" class="msg-user">
-          <div class="msg-bubble user-bubble">{{ msg.content }}</div>
+      <!-- Messages area -->
+      <div class="chat-messages" ref="msgContainer">
+        <div v-if="messages.length === 0" class="empty-hint">
+          <el-icon style="font-size:48px;color:#cbd5e1"><ChatDotRound /></el-icon>
+          <p style="margin-top:12px;color:#94a3b8">向 DataRobort 提问，开始数据分析</p>
         </div>
 
-        <!-- Assistant message -->
-        <div v-else class="msg-assistant">
-          <div class="msg-bubble assistant-bubble">
-            <!-- Node traces -->
-            <div v-if="msg.traces && msg.traces.length > 0" class="traces-panel">
-              <div v-for="t in msg.traces" :key="t.node" class="trace-row">
-                <el-icon :color="t.status === 'done' ? '#10b981' : t.status === 'failed' ? '#ef4444' : '#f59e0b'">
-                  <component :is="t.status === 'done' ? 'CircleCheckFilled' : t.status === 'failed' ? 'CircleCloseFilled' : 'Loading'" />
-                </el-icon>
-                <span class="trace-node">{{ t.node }}</span>
-                <span v-if="t.message" class="trace-msg">{{ t.message }}</span>
-                <span v-if="t.durationMs" class="trace-time">{{ t.durationMs }}ms</span>
+        <div v-for="(msg, i) in messages" :key="i" class="msg-wrapper">
+          <!-- User message -->
+          <div v-if="msg.role === 'user'" class="msg-user">
+            <div class="msg-bubble user-bubble">{{ msg.content }}</div>
+          </div>
+
+          <!-- Assistant message -->
+          <div v-else class="msg-assistant">
+            <div class="msg-bubble assistant-bubble">
+              <!-- Node traces -->
+              <div v-if="msg.traces && msg.traces.length > 0" class="traces-panel">
+                <div v-for="t in msg.traces" :key="t.node" class="trace-row">
+                  <el-icon :color="t.status === 'done' ? '#10b981' : t.status === 'failed' ? '#ef4444' : '#f59e0b'">
+                    <component :is="t.status === 'done' ? 'CircleCheckFilled' : t.status === 'failed' ? 'CircleCloseFilled' : 'Loading'" />
+                  </el-icon>
+                  <span class="trace-node">{{ t.node }}</span>
+                  <span v-if="t.message" class="trace-msg">{{ t.message }}</span>
+                  <span v-if="t.durationMs" class="trace-time">{{ t.durationMs }}ms</span>
+                </div>
               </div>
-            </div>
 
-            <!-- Stream indicator -->
-            <div v-if="msg.streaming && msg.traces && msg.traces.length > 0" style="color:#94a3b8;font-size:12px;margin-top:4px">
-              <el-icon><Loading /></el-icon> 分析中...
-            </div>
-
-            <!-- Report markdown -->
-            <div v-if="msg.markdownReport" class="report-content" v-html="renderMarkdown(msg.markdownReport)"></div>
-
-            <!-- Report file (HTML with embedded charts) -->
-            <div v-if="msg.reportFileUrl" class="report-file">
-              <div class="report-file-head">
-                <el-icon color="#4F46E5"><Document /></el-icon>
-                <span class="report-file-title">分析报告文件</span>
-                <el-button size="small" type="primary" plain
-                           @click="msg.showReportFile = !msg.showReportFile">
-                  {{ msg.showReportFile ? '收起' : '查看' }}
-                </el-button>
-                <a class="report-open" :href="msg.reportFileUrl" target="_blank">新窗口打开</a>
+              <!-- Stream indicator -->
+              <div v-if="msg.streaming && msg.traces && msg.traces.length > 0" style="color:#94a3b8;font-size:12px;margin-top:4px">
+                <el-icon><Loading /></el-icon> 分析中...
               </div>
-              <iframe v-if="msg.showReportFile" :src="msg.reportFileUrl"
-                      class="report-iframe" title="分析报告"></iframe>
-            </div>
 
-            <!-- Chart (ECharts fallback, when no report file) -->
-            <div v-if="msg.chartOption && !msg.reportFileUrl" class="chart-container">
-              <div :ref="el => setChartRef(i, el)" style="width:100%;height:360px"></div>
-            </div>
+              <!-- Report markdown -->
+              <div v-if="msg.markdownReport" class="report-content" v-html="renderMarkdown(msg.markdownReport)"></div>
 
-            <!-- Raw result -->
-            <div v-if="msg.sql" class="sql-display">
-              <el-collapse>
-                <el-collapse-item title="SQL 查询">
-                  <pre>{{ msg.sql }}</pre>
-                </el-collapse-item>
-              </el-collapse>
-            </div>
+              <!-- Report file (HTML with embedded charts) -->
+              <div v-if="msg.reportFileUrl" class="report-file">
+                <div class="report-file-head">
+                  <el-icon color="#4F46E5"><Document /></el-icon>
+                  <span class="report-file-title">分析报告文件</span>
+                  <el-button size="small" type="primary" plain
+                             @click="msg.showReportFile = !msg.showReportFile">
+                    {{ msg.showReportFile ? '收起' : '查看' }}
+                  </el-button>
+                  <a class="report-open" :href="msg.reportFileUrl" target="_blank">新窗口打开</a>
+                </div>
+                <iframe v-if="msg.showReportFile" :src="msg.reportFileUrl"
+                        class="report-iframe" title="分析报告"></iframe>
+              </div>
 
-            <!-- Error -->
-            <div v-if="msg.failed" class="error-msg">{{ msg.errorMessage || '分析失败' }}</div>
+              <!-- Chart (ECharts fallback, when no report file) -->
+              <div v-if="msg.chartOption && !msg.reportFileUrl" class="chart-container">
+                <div :ref="el => setChartRef(i, el)" style="width:100%;height:360px"></div>
+              </div>
+
+              <!-- Raw result -->
+              <div v-if="msg.sql" class="sql-display">
+                <el-collapse>
+                  <el-collapse-item title="SQL 查询">
+                    <pre>{{ msg.sql }}</pre>
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
+
+              <!-- Error -->
+              <div v-if="msg.failed" class="error-msg">{{ msg.errorMessage || '分析失败' }}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -86,8 +116,11 @@
 
 <script setup>
 import { ref, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import { useChatStream } from '../api/chat'
+import { listAgents } from '../api/agent'
+import { listConversations, createConversation, listMessages } from '../api/conversation'
 
 const { result, send } = useChatStream()
 const question = ref('')
@@ -96,13 +129,99 @@ const messages = reactive([])
 const msgContainer = ref(null)
 const chartRefs = {}
 
+// P4: agent + conversation state
+const agents = ref([])
+const agentId = ref(null)
+const conversationId = ref(null)
+const conversations = ref([])
+const currentConversation = ref(null)
+
 function setChartRef(idx, el) {
   if (el) chartRefs[idx] = el
 }
 
+function formatTime(t) {
+  return t ? String(t).replace('T', ' ').substring(5, 16) : ''
+}
+
 onMounted(() => {
   result.value = { streaming: false, intent: '', sql: '', chartOption: null, markdownReport: '', reportFileUrl: '', traces: [], failed: false, errorMessage: '', complete: false }
+  fetchAgents()
+  fetchConversations()
 })
+
+async function fetchAgents() {
+  try {
+    agents.value = await listAgents()
+  } catch (e) { /* non-fatal */ }
+}
+
+async function fetchConversations() {
+  try {
+    conversations.value = await listConversations(agentId.value || undefined)
+  } catch (e) { /* non-fatal */ }
+}
+
+function onAgentChange() {
+  // Switching agent starts a new chat; keep the current conversation when re-selecting the same agent
+  newChat()
+  fetchConversations()
+}
+
+function newChat() {
+  if (sending.value) {
+    ElMessage.warning('分析进行中，请稍候')
+    return
+  }
+  conversationId.value = null
+  currentConversation.value = null
+  messages.splice(0)
+}
+
+async function loadConversation(c) {
+  if (sending.value) {
+    ElMessage.warning('分析进行中，请稍候')
+    return
+  }
+  conversationId.value = c.id
+  currentConversation.value = c
+  // Sync the agent selector with the conversation's agent binding
+  agentId.value = c.agentId || null
+  try {
+    const msgs = await listMessages(c.id)
+    messages.splice(0)
+    for (const m of msgs) {
+      messages.push({
+        role: m.role,
+        content: m.content,
+        traces: parseTraces(m.nodeTraces),
+        markdownReport: m.markdownReport || '',
+        chartOption: null,
+        reportFileUrl: m.reportFileUrl || '',
+        showReportFile: false,
+        sql: m.sqlText || '',
+        failed: false,
+        errorMessage: '',
+        streaming: false,
+      })
+    }
+    scrollToBottom()
+  } catch (e) { /* interceptor shows message */ }
+}
+
+function parseTraces(json) {
+  if (!json) return []
+  try {
+    const t = JSON.parse(json)
+    return Array.isArray(t) ? t : []
+  } catch { return [] }
+}
+
+function scrollToBottom() {
+  nextTick(() => {
+    if (msgContainer.value) msgContainer.value.scrollTop = msgContainer.value.scrollHeight
+  })
+}
 
 /** Current assistant message index while streaming, -1 if not streaming */
 let streamingMsgIdx = -1
@@ -185,6 +304,21 @@ async function doSend() {
   sending.value = true
   question.value = ''
 
+  // Create a conversation on the first message of this session
+  try {
+    if (!conversationId.value) {
+      const conv = await createConversation({ agentId: agentId.value, title: q.slice(0, 30) })
+      conversationId.value = conv.id
+      currentConversation.value = conv
+      fetchConversations()
+    }
+  } catch (e) {
+    ElMessage.error('创建会话失败: ' + (e.message || '未知错误'))
+    sending.value = false
+    question.value = q
+    return
+  }
+
   // Add user message
   messages.push({ role: 'user', content: q, traces: [], markdownReport: '', chartOption: null, reportFileUrl: '', showReportFile: false, sql: '', failed: false, errorMessage: '', streaming: false })
 
@@ -200,7 +334,10 @@ async function doSend() {
   if (msgContainer.value) msgContainer.value.scrollTop = msgContainer.value.scrollHeight
 
   // Now fire the SSE request — watchers update the UI reactively
-  await send(q)
+  await send(q, { agentId: agentId.value, conversationId: conversationId.value })
+
+  // Refresh the conversation list (new title / updated time)
+  fetchConversations()
 }
 
 // Simple markdown → HTML renderer
@@ -230,10 +367,31 @@ function renderMarkdown(md) {
 
 <style scoped>
 .chat-page {
-  display: flex; flex-direction: column; height: calc(100vh - 120px); max-width: 900px; margin: 0 auto;
+  display: flex; flex-direction: column; height: calc(100vh - 120px); max-width: 1200px; margin: 0 auto;
 }
+.chat-topbar {
+  display: flex; align-items: center; gap: 10px; padding: 8px 0 10px;
+  border-bottom: 1px solid #e6e9f2;
+}
+.conv-title { font-size: 13px; color: #64748b; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-body { display: flex; flex: 1; min-height: 0; gap: 12px; }
+.conv-sidebar {
+  width: 200px; flex: none; border-right: 1px solid #e6e9f2; display: flex; flex-direction: column;
+}
+.conv-sidebar-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; font-size: 13px; font-weight: 700; color: #475569;
+}
+.conv-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+.conv-item {
+  padding: 8px 10px; border-radius: 8px; cursor: pointer; margin-bottom: 4px;
+}
+.conv-item:hover { background: #eef2ff; }
+.conv-item.active { background: #eef2ff; border: 1px solid #c7d2fe; }
+.conv-item-title { font-size: 13px; color: #1e293b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-item-time { font-size: 11px; color: #94a3b8; margin-top: 2px; }
 .chat-messages {
-  flex: 1; overflow-y: auto; padding: 16px 0;
+  flex: 1; overflow-y: auto; padding: 16px 0; min-width: 0;
 }
 .empty-hint {
   display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%;

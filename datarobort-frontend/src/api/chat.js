@@ -20,7 +20,7 @@ export function useChatStream() {
   // Used to prefix the report file URL (e.g. /reports/xxx.html) for iframe display.
   let apiBase = 'http://localhost:8080'
 
-  async function send(question) {
+  async function send(question, options = {}) {
     result.value = { streaming: true, intent: '', sql: '', rowCount: 0,
       chartOption: null, markdownReport: '', reportFileUrl: '', traces: [],
       failed: false, errorMessage: '', complete: false }
@@ -33,10 +33,14 @@ export function useChatStream() {
       const sseUrl = import.meta.env.VITE_SSE_URL || 'http://localhost:8080/api/chat/stream'
       apiBase = sseUrl.replace(/\/api\/chat\/stream$/, '')
 
+      const body = { question }
+      if (options.agentId != null) body.agentId = options.agentId
+      if (options.conversationId != null) body.conversationId = options.conversationId
+
       const res = await fetch(sseUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error('HTTP ' + res.status)
 

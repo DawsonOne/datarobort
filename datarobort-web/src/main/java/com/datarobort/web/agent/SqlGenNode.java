@@ -58,11 +58,22 @@ public class SqlGenNode implements GraphNode {
 
         long start = System.currentTimeMillis();
         try {
-            String schema = buildSchemaContext();
+            String schema = buildSchemaContext(state);
             String recall = state.getRecallContext() != null ? state.getRecallContext() : "";
-            String prompt = """
+            String agentPrompt = (String) state.getAgentConfig().get("prompt");
+            String history = (String) state.getAgentConfig().get("history");
+
+            StringBuilder prompt = new StringBuilder("""
                     你是一个 SQL 专家。根据以下信息生成一条只读的 SELECT 语句。
 
+                    """);
+            if (agentPrompt != null && !agentPrompt.isBlank()) {
+                prompt.append("### 智能体设定（业务背景/角色）\n").append(agentPrompt).append("\n\n");
+            }
+            if (history != null && !history.isBlank()) {
+                prompt.append("### 对话历史\n").append(history).append("\n");
+            }
+            prompt.append("""
                     ### 数据库表结构
                     %s
 
@@ -78,10 +89,10 @@ public class SqlGenNode implements GraphNode {
                     - 使用 LIMIT 限制最多返回 500 行
                     - 如果问题无法转化为 SQL，回复: NO_SQL
 
-                    SQL:""".formatted(schema, recall, state.getUserQuestion());
+                    SQL:""".formatted(schema, recall, state.getUserQuestion()));
 
             ChatClient client = defaultChatClient();
-            String sql = client.prompt().user(prompt).call().content();
+            String sql = client.prompt().user(prompt.toString()).call().content();
             if (sql == null || sql.isBlank() || sql.contains("NO_SQL")) {
                 state.addTrace("sql-gen", "done", System.currentTimeMillis() - start, "no SQL needed");
                 return state;
@@ -100,39 +111,57 @@ public class SqlGenNode implements GraphNode {
         return state;
     }
 
-    private String buildSchemaContext() {
-        // For P3: grab metadata from data source id=1 (demo business DB).
-        Long dsId = 1L;
-        // Decrypt datasource password for connection
-        Datasource ds = datasourceMapper.selectById(dsId);
-        if (ds != null && ds.getPassword() != null) {
-            ds.setPassword(AesCryptoUtil.decrypt(ds.getPassword(), cryptoKey));
+    /** Resolve agent-bound datasource ids; fall back to the legacy default (id=1). */
+    private List<Long> resolveDsIds(AgentState state) {
+        Object v = state.getAgentConfig().get("datasourceIds");
+        if (v instanceof List<?> list && !list.isEmpty()) {
+            List<Long> ids = new ArrayList<>();
+            for (Object o : list) {
+                if (o instanceof Number n) ids.add(n.longValue());
+            }
+            if (!ids.isEmpty()) return ids;
         }
+        return List.of(1L);
+    }
 
-        List<DsTable> tables = tableMapper.selectByDsId(dsId);
+    private String buildSchemaContext(AgentState state) {
         StringBuilder sb = new StringBuilder();
-        for (DsTable t : tables) {
-            sb.append("表: ").append(t.getTableName());
-            if (t.getTableComment() != null) sb.append(" (").append(t.getTableComment()).append(")");
-            sb.append("\n");
-            List<DsColumn> cols = columnMapper.selectByTableId(t.getId());
-            for (DsColumn c : cols) {
-                sb.append("  ").append(c.getColumnName())
-                        .append(" ").append(c.getDataType() != null ? c.getDataType() : "VARCHAR");
-                if (c.getColumnComment() != null) sb.append(" -- ").append(c.getColumnComment());
-                if (Boolean.TRUE.equals(c.getIsPrimary())) sb.append(" [PK]");
+        for (Long dsId : resolveDsIds(state)) {
+            Datasource ds = datasourceMapper.selectById(dsId);
+            if (ds == null) {
+                log.warn("datasource {} not found, skipped", dsId);
+                continue;
+            }
+            // Decrypt datasource password for connection (distinct-value queries)
+            if (ds.getPassword() != null) {
+                ds.setPassword(AesCryptoUtil.decrypt(ds.getPassword(), cryptoKey));
+            }
 
-                // Include DISTINCT values for low-cardinality VARCHAR columns (like status, level, category)
-                String type = c.getDataType() != null ? c.getDataType().toLowerCase() : "";
-                if ((type.contains("varchar") || type.contains("char")) && ds != null) {
-                    List<String> vals = queryDistinctValues(ds, t.getTableName(), c.getColumnName(), 20);
-                    if (!vals.isEmpty()) {
-                        sb.append(" [可选值: ").append(String.join(", ", vals)).append("]");
+            sb.append("【数据源: ").append(ds.getName() != null ? ds.getName() : ("#" + dsId)).append("】\n");
+            List<DsTable> tables = tableMapper.selectByDsId(dsId);
+            for (DsTable t : tables) {
+                sb.append("表: ").append(t.getTableName());
+                if (t.getTableComment() != null) sb.append(" (").append(t.getTableComment()).append(")");
+                sb.append("\n");
+                List<DsColumn> cols = columnMapper.selectByTableId(t.getId());
+                for (DsColumn c : cols) {
+                    sb.append("  ").append(c.getColumnName())
+                            .append(" ").append(c.getDataType() != null ? c.getDataType() : "VARCHAR");
+                    if (c.getColumnComment() != null) sb.append(" -- ").append(c.getColumnComment());
+                    if (Boolean.TRUE.equals(c.getIsPrimary())) sb.append(" [PK]");
+
+                    // Include DISTINCT values for low-cardinality VARCHAR columns (like status, level, category)
+                    String type = c.getDataType() != null ? c.getDataType().toLowerCase() : "";
+                    if ((type.contains("varchar") || type.contains("char"))) {
+                        List<String> vals = queryDistinctValues(ds, t.getTableName(), c.getColumnName(), 20);
+                        if (!vals.isEmpty()) {
+                            sb.append(" [可选值: ").append(String.join(", ", vals)).append("]");
+                        }
                     }
+                    sb.append("\n");
                 }
                 sb.append("\n");
             }
-            sb.append("\n");
         }
         return sb.toString();
     }

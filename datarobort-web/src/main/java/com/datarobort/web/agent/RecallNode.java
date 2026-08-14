@@ -7,11 +7,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Calls RecallService to retrieve knowledge base chunks, business terms,
  * and semantic model mappings for the user's question.
+ * The recall scope (knowledge bases + switches) follows the agent binding.
  */
 @Slf4j
 @Component
@@ -29,7 +32,13 @@ public class RecallNode implements GraphNode {
 
         long start = System.currentTimeMillis();
         try {
-            List<RecallService.RecallItem> items = recallService.recall(state.getUserQuestion(), 5, 0.2);
+            Map<String, Object> cfg = state.getAgentConfig();
+            List<Long> kbIds = toLongList(cfg.get("kbIds"));
+            Boolean businessEnabled = (Boolean) cfg.get("businessRecallEnabled");
+            Boolean semanticEnabled = (Boolean) cfg.get("semanticRecallEnabled");
+
+            List<RecallService.RecallItem> items =
+                    recallService.recall(state.getUserQuestion(), 5, 0.2, kbIds, businessEnabled, semanticEnabled);
             StringBuilder sb = new StringBuilder();
             for (RecallService.RecallItem item : items) {
                 sb.append("[").append(item.getSourceType()).append("] ");
@@ -48,5 +57,16 @@ public class RecallNode implements GraphNode {
             state.addTrace("recall", "done", System.currentTimeMillis() - start, "failed: " + e.getMessage());
         }
         return state;
+    }
+
+    private List<Long> toLongList(Object v) {
+        // absent key → null (no scope, search all enabled KBs);
+        // present key → the list itself, possibly empty (agent binds no KBs)
+        if (!(v instanceof List<?> list)) return null;
+        List<Long> ids = new ArrayList<>();
+        for (Object o : list) {
+            if (o instanceof Number n) ids.add(n.longValue());
+        }
+        return ids;
     }
 }

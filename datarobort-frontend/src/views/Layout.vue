@@ -4,7 +4,7 @@
     <el-aside width="220px" style="background: #1e293b">
       <div class="logo">
         <span class="logo-text">DataRobort</span>
-        <span class="logo-sub">P3 Agent 核心链路</span>
+        <span class="logo-sub">P4 智能体 + MCP</span>
       </div>
       <el-menu
         :default-active="activeMenu"
@@ -40,6 +40,15 @@
           <el-icon><Connection /></el-icon>
           <span>语义模型</span>
         </el-menu-item>
+        <el-divider style="margin:8px 0;border-color:#334155" />
+        <el-menu-item index="/agents">
+          <el-icon><MagicStick /></el-icon>
+          <span>智能体管理</span>
+        </el-menu-item>
+        <el-menu-item index="/conversations">
+          <el-icon><ChatLineSquare /></el-icon>
+          <span>会话历史</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -49,7 +58,7 @@
         <span style="font-size: 16px; font-weight: 700; color: #1e293b">
           {{ $route.meta?.title || 'DataRobort' }}
         </span>
-        <el-tag type="success" size="small">里程碑 M1</el-tag>
+        <el-tag type="success" size="small">里程碑 M4 · Beta</el-tag>
       </el-header>
       <el-main style="background: #f5f7fb; overflow-y: auto">
         <router-view />

@@ -14,6 +14,7 @@ public class AgentState {
     // --- Input ---
     private String userQuestion;
     private Long agentId;
+    private Long conversationId;   // bound conversation (multi-turn), nullable
     private Map<String, Object> agentConfig = new LinkedHashMap<>();
 
     // --- Intent ---

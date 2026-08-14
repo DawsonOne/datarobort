@@ -47,8 +47,10 @@ public class SqlExecNode implements GraphNode {
         }
 
         long start = System.currentTimeMillis();
-        // FIXME P4: use agent-bound datasource, not hardcoded id=1
-        Datasource ds = datasourceMapper.selectById(1L);
+        // Agent-bound datasource: use the first datasource the agent binds;
+        // fall back to the legacy default (id=1) when no binding exists.
+        Long dsId = resolveDsId(state);
+        Datasource ds = datasourceMapper.selectById(dsId);
         if (ds == null) {
             state.addTrace("sql-exec", "failed", 0, "no datasource configured");
             state.setFailed(true); state.setErrorMessage("未配置数据源");
@@ -88,6 +90,17 @@ public class SqlExecNode implements GraphNode {
             state.setFailed(true); state.setErrorMessage("SQL执行失败: " + e.getMessage());
         }
         return state;
+    }
+
+    /** Resolve the agent-bound datasource id; fall back to the legacy default (id=1). */
+    private Long resolveDsId(AgentState state) {
+        Object v = state.getAgentConfig().get("datasourceIds");
+        if (v instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Number n) return n.longValue();
+            }
+        }
+        return 1L;
     }
 
     private Datasource plainCopy(Datasource d) {

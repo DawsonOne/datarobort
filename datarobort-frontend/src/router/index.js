@@ -42,6 +42,18 @@ const routes = [
         component: () => import('../views/SemanticModel.vue'),
         meta: { title: '语义模型', group: 'knowledge' },
       },
+      {
+        path: 'agents',
+        name: 'AgentManage',
+        component: () => import('../views/AgentManage.vue'),
+        meta: { title: '智能体管理', group: 'agent' },
+      },
+      {
+        path: 'conversations',
+        name: 'ConversationList',
+        component: () => import('../views/ConversationList.vue'),
+        meta: { title: '会话历史', group: 'agent' },
+      },
     ],
   },
 ]

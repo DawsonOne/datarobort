@@ -45,6 +45,19 @@ public class RecallService {
      * Returns a single ranked list of RecallItem across all enabled sources.
      */
     public List<RecallItem> recall(String query, int topK, double threshold) {
+        return recall(query, topK, threshold, null, null, null);
+    }
+
+    /**
+     * Agent-scoped recall. The scope restricts which knowledge bases are
+     * searched and whether business / semantic recall is switched on.
+     *
+     * @param kbIds            bound knowledge base ids; null = all enabled KBs
+     * @param businessEnabled  business knowledge switch; null = default on
+     * @param semanticEnabled  semantic model switch; null = default on
+     */
+    public List<RecallItem> recall(String query, int topK, double threshold,
+                                   List<Long> kbIds, Boolean businessEnabled, Boolean semanticEnabled) {
         List<RecallItem> all = new ArrayList<>();
 
         // 1. Knowledge base chunks (each KB uses its own index)
@@ -52,6 +65,8 @@ public class RecallService {
         for (KnowledgeBase kb : kbs) {
             if (kb.getRecallEnabled() == null || !kb.getRecallEnabled() || kb.getStatus() == null || kb.getStatus() != 1)
                 continue;
+            // Agent scope: null = all enabled KBs; a (possibly empty) list = only bound KBs
+            if (kbIds != null && !kbIds.contains(kb.getId())) continue;
             try {
                 String idx = EmbeddingPipeline.indexName(kb.getId());
                 if (!vectorStore.indexExists(idx)) continue;
@@ -72,7 +87,30 @@ public class RecallService {
             }
         }
 
-        // 2. Business knowledge
+        // 2. Business knowledge (agent switch can disable it)
+        if (Boolean.FALSE.equals(businessEnabled)) {
+            log.debug("business knowledge recall disabled by agent scope");
+        } else {
+            doBusinessRecall(query, topK, threshold, all);
+        }
+
+        // 3. Semantic model (agent switch can disable it)
+        if (Boolean.FALSE.equals(semanticEnabled)) {
+            log.debug("semantic model recall disabled by agent scope");
+        } else {
+            doSemanticRecall(query, topK, threshold, all);
+        }
+
+        // Dedup & rerank
+        all = deduplicate(all);
+        all.sort(Comparator.comparingDouble(RecallItem::getScore).reversed());
+        if (all.size() > topK) all = all.subList(0, topK);
+
+        log.debug("recall for '{}' returned {} items", query, all.size());
+        return all;
+    }
+
+    private void doBusinessRecall(String query, int topK, double threshold, List<RecallItem> all) {
         List<BusinessKnowledge> bks = bkMapper.selectEnabled();
         if (!bks.isEmpty() && vectorStore.indexExists("idx:business_knowledge")) {
             try {
@@ -93,8 +131,9 @@ public class RecallService {
                 log.warn("recall from business_knowledge failed: {}", e.getMessage());
             }
         }
+    }
 
-        // 3. Semantic model
+    private void doSemanticRecall(String query, int topK, double threshold, List<RecallItem> all) {
         List<SemanticModel> sms = smMapper.selectEnabled();
         if (!sms.isEmpty() && vectorStore.indexExists("idx:semantic_model")) {
             try {
@@ -115,14 +154,6 @@ public class RecallService {
                 log.warn("recall from semantic_model failed: {}", e.getMessage());
             }
         }
-
-        // Dedup & rerank
-        all = deduplicate(all);
-        all.sort(Comparator.comparingDouble(RecallItem::getScore).reversed());
-        if (all.size() > topK) all = all.subList(0, topK);
-
-        log.debug("recall for '{}' returned {} items", query, all.size());
-        return all;
     }
 
     public List<RecallItem> recall(String query) {

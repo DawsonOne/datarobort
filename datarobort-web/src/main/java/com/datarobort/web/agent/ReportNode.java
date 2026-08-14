@@ -99,15 +99,21 @@ public class ReportNode implements GraphNode {
                     state.getQueryResult().size() > 20
                             ? state.getQueryResult().subList(0, 20)
                             : state.getQueryResult());
-            String prompt = """
+            String agentPrompt = (String) state.getAgentConfig().get("prompt");
+            StringBuilder prompt = new StringBuilder("""
                     根据以下数据，用 3-5 句话中文总结关键发现。直接回复，不要 markdown 格式。
 
+                    """);
+            if (agentPrompt != null && !agentPrompt.isBlank()) {
+                prompt.append("智能体角色设定: ").append(agentPrompt).append("\n\n");
+            }
+            prompt.append("""
                     问题: %s
                     数据: %s
 
-                    总结:""".formatted(state.getUserQuestion(), dataJson);
+                    总结:""".formatted(state.getUserQuestion(), dataJson));
 
-            String summary = client.prompt().user(prompt).call().content();
+            String summary = client.prompt().user(prompt.toString()).call().content();
             return "## 数据洞察\n\n" + (summary != null ? summary : "*(无法生成摘要)*");
         } catch (Exception e) {
             return "## 数据洞察\n\n*(LLM 摘要生成失败)*";

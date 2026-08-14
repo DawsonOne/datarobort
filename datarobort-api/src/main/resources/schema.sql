@@ -146,3 +146,61 @@ CREATE TABLE IF NOT EXISTS recall_log (
     KEY idx_query (query_text(128)),
     KEY idx_created (created_at)
 ) ENGINE = InnoDB COMMENT '召回日志（可观测性）';
+
+-- ============================================================
+-- P4：智能体管理 + 会话管理 + MCP
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS agent (
+    id                       BIGINT       NOT NULL AUTO_INCREMENT,
+    name                     VARCHAR(128) NOT NULL COMMENT '智能体名称',
+    avatar                   VARCHAR(512) DEFAULT NULL COMMENT '头像地址',
+    prompt                   TEXT         DEFAULT NULL COMMENT '自定义系统 Prompt（业务背景/角色设定）',
+    status                   TINYINT      NOT NULL DEFAULT 0 COMMENT '1 已发布 0 草稿',
+    business_recall_enabled  TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '业务知识召回开关',
+    semantic_recall_enabled  TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '语义模型召回开关',
+    create_time              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_agent_name (name)
+) ENGINE = InnoDB COMMENT '智能体';
+
+CREATE TABLE IF NOT EXISTS agent_datasource (
+    id       BIGINT NOT NULL AUTO_INCREMENT,
+    agent_id BIGINT NOT NULL COMMENT 'agent.id',
+    ds_id    BIGINT NOT NULL COMMENT 'datasource.id',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_agent_ds (agent_id, ds_id)
+) ENGINE = InnoDB COMMENT '智能体-数据源关联';
+
+CREATE TABLE IF NOT EXISTS agent_knowledge (
+    id       BIGINT NOT NULL AUTO_INCREMENT,
+    agent_id BIGINT NOT NULL COMMENT 'agent.id',
+    kb_id    BIGINT NOT NULL COMMENT 'knowledge_base.id',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_agent_kb (agent_id, kb_id)
+) ENGINE = InnoDB COMMENT '智能体-知识库关联';
+
+CREATE TABLE IF NOT EXISTS conversation (
+    id          BIGINT       NOT NULL AUTO_INCREMENT,
+    agent_id    BIGINT       DEFAULT NULL COMMENT '绑定智能体（NULL 表示默认链路）',
+    title       VARCHAR(256) DEFAULT NULL COMMENT '会话标题',
+    create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_agent (agent_id)
+) ENGINE = InnoDB COMMENT '对话会话';
+
+CREATE TABLE IF NOT EXISTS message (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    conversation_id BIGINT       NOT NULL COMMENT 'conversation.id',
+    role            VARCHAR(16)  NOT NULL COMMENT 'user | assistant',
+    content         TEXT         NOT NULL COMMENT '消息内容',
+    sql_text        TEXT         DEFAULT NULL COMMENT '生成的 SQL（assistant）',
+    markdown_report LONGTEXT     DEFAULT NULL COMMENT '分析报告 Markdown（assistant）',
+    report_file_url VARCHAR(512) DEFAULT NULL COMMENT 'HTML 报告文件地址（assistant）',
+    node_traces     LONGTEXT     DEFAULT NULL COMMENT '节点执行轨迹 JSON',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_conversation (conversation_id)
+) ENGINE = InnoDB COMMENT '会话消息';
