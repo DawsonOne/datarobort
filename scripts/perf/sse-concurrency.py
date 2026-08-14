@@ -95,7 +95,7 @@ def run_level(level, question, timeout):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default=BASE)
+    ap.add_argument("--base", default="http://localhost:8080")
     ap.add_argument("--concurrency", default="5,10,20")
     ap.add_argument("--question", default="统计orders表总订单数和总销售额，并按类目分析")
     ap.add_argument("--timeout", type=int, default=180)

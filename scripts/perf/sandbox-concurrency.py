@@ -78,7 +78,7 @@ def run_level(level):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default=BASE)
+    ap.add_argument("--base", default="http://localhost:8080")
     ap.add_argument("--levels", default="2,4,6")
     args = ap.parse_args()
     global BASE
